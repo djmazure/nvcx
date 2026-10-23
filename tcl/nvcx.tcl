@@ -53,7 +53,7 @@ namespace eval nvcx {
         file mkdir $snapshots
         set tmp [::fileutil::maketempdir -prefix "[file tail $dir]." -dir $snapshots]
         ::fileutil::writeFile [file join $tmp key.txt] $key
-        set args [list -debug all -dll {*}$elab]
+        set args [list -dll {*}$elab]
         foreach g [split $text "\n"] {
             if {$g ne ""} { lappend args -generic_top $g }
         }

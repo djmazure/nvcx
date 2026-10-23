@@ -1,5 +1,6 @@
 #pragma once
 
+#include <boost/context/fiber.hpp>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -31,9 +32,10 @@ class Simulation {
         }
     };
     enum class RunStatus {
-        Completed,
-        Finished,
+        Completed, // quiescent at the target time
+        Finished,  // the design ended its own simulation
         Error,
+        Yielded, // paused at a delta boundary (see start)
     };
     struct RunResult {
         RunStatus status;
@@ -58,8 +60,19 @@ class Simulation {
     int precision() const {
         return kernel_->xsi_get_int(handle_, xsiTimePrecisionKernel);
     }
-    // Run *ticks* time units (zero: settle the current time's deltas).
+    // Run *ticks* time units (zero: settle the current time's deltas) to
+    // quiescence.
     RunResult run(uint64_t ticks);
+    // The same, one delta at a time. The kernel runs on a coroutine that
+    // yields after each delta's signal updates, with that delta's processes
+    // still to run: start() and each resume() return Yielded there, so the
+    // caller can read the updated outputs and write inputs the processes will
+    // see. The other statuses mean the kernel returned and is quiescent.
+    RunResult start(uint64_t ticks);
+    RunResult resume();
+    bool suspended() const {
+        return suspended_;
+    }
     bool finished() const {
         return finished_;
     }
@@ -85,6 +98,14 @@ class Simulation {
   private:
     std::string last_error();
     void emit_report(const std::string& raw);
+    RunResult after_run();
+    static void on_active_events(void* eventq);
+    // The kernel runs on a fiber of its own (one per Simulation, kept for
+    // its lifetime); main_ is the caller's side while the kernel runs.
+    boost::context::fiber run_, main_;
+    uint64_t run_ticks_ = 0;
+    bool running_ = false;   // inside xsi_run on the coroutine
+    bool suspended_ = false; // paused at a delta boundary
     Kernel* kernel_ = nullptr;
     void* design_handle_ = nullptr;
     XsiHandle handle_ = nullptr;

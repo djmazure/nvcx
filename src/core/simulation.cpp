@@ -1,6 +1,7 @@
 #include "nvcx/simulation.hpp"
 
 #include <dlfcn.h>
+#include <boost/context/protected_fixedsize_stack.hpp>
 #include <format>
 #include <fstream>
 #include <cctype>
@@ -37,6 +38,21 @@ namespace {
     // xsi_open is serialized across instances
     std::mutex g_open_mu;
 
+    // The Simulation whose kernel is executing (xsi_open, xsi_close, a run),
+    // for the hook on its delta cycles
+    thread_local Simulation* t_current = nullptr;
+    struct Current {
+        Simulation* outer = t_current;
+        explicit Current(Simulation* s) {
+            t_current = s;
+        }
+        ~Current() {
+            t_current = outer;
+        }
+    };
+
+    constexpr size_t STACK_SIZE = 8 << 20; // the kernel's fiber
+
     // Registered with atexit after each Simulation has loaded its libraries,
     // so it runs before any of their static destructors
     void close_live_at_exit() {
@@ -56,6 +72,23 @@ Simulation::Simulation(const std::string& design_so,
                        const std::string& kernel_so)
     : design_dir_(dirname_of(design_so)) {
     kernel_ = &Kernel::get(kernel_so);
+    kernel_->hook_active_events(on_active_events);
+    // The kernel's fiber: each start() hands it the ticks to run and resumes
+    // it; it hands back when the run yields or returns.
+    run_ = boost::context::fiber(
+        std::allocator_arg,
+        boost::context::protected_fixedsize_stack(STACK_SIZE),
+        [this](boost::context::fiber&& main) {
+            main_ = std::move(main);
+            for (;;) {
+                running_ = true;
+                kernel_->xsi_run(handle_, run_ticks_);
+                running_ = false;
+                suspended_ = false;
+                main_ = std::move(main_).resume();
+            }
+            return std::move(main_);
+        });
     // A snapshot only loads on the release that elaborated it; the kernel
     // does not check, and a mismatch dies with a garbage allocation size.
     const std::string elaborated_by = snapshot_version(design_dir_);
@@ -101,6 +134,7 @@ Simulation::Simulation(const std::string& design_so,
         xsim_dir_ = dirname_of(design_dir_);
         setup_.xsimDir = xsim_dir_.data();
         try {
+            Current current(this);
             handle_ = xsi_open(&setup_);
         } catch (...) {
             throw std::runtime_error(std::format(
@@ -152,8 +186,13 @@ void Simulation::close() {
         std::lock_guard<std::mutex> lock(g_live_mu);
         g_live.erase(kernel_);
     }
-    if (handle_)
+    // the kernel cannot be closed in the middle of a time step
+    while (suspended_)
+        resume();
+    if (handle_) {
+        Current current(this);
         kernel_->xsi_close(handle_);
+    }
     handle_ = nullptr;
 }
 
@@ -188,18 +227,38 @@ std::string Simulation::last_error() {
     return e ? e : "";
 }
 
+// The buffer holds every report of the run, newest first, each as
+// '@"<text>\nTime: ... Process: ...\n"': split them, drop the kernel's own
+// location trailer (the sink adds its simulator's), emit oldest first.
 void Simulation::emit_report(const std::string& raw) {
-    std::string msg = raw;
-    if (msg.rfind("@\"", 0) == 0)
-        msg.erase(0, 2);
-    while (!msg.empty() && (msg.back() == '"' || msg.back() == '\n'))
-        msg.pop_back();
-    if (report_sink_) {
-        report_sink_(msg);
-        return;
+    std::vector<std::string> msgs;
+    size_t pos = 0;
+    while (pos < raw.size()) {
+        size_t start = raw.find("@\"", pos);
+        if (start == std::string::npos) {
+            if (msgs.empty())
+                msgs.push_back(raw);
+            break;
+        }
+        size_t next = raw.find("\n@\"", start + 2);
+        std::string m = raw.substr(
+            start + 2, next == std::string::npos ? next : next - (start + 2));
+        while (!m.empty() && (m.back() == '"' || m.back() == '\n'))
+            m.pop_back();
+        size_t nl = m.rfind('\n');
+        if (nl != std::string::npos && m.compare(nl + 1, 5, "Time:") == 0)
+            m.erase(nl);
+        msgs.push_back(m);
+        pos = next == std::string::npos ? raw.size() : next + 1;
     }
-    fprintf(stdout, "%s\n", msg.c_str());
-    fflush(stdout);
+    for (auto it = msgs.rbegin(); it != msgs.rend(); ++it) {
+        if (report_sink_) {
+            report_sink_(*it);
+        } else {
+            fprintf(stdout, "%s\n", it->c_str());
+            fflush(stdout);
+        }
+    }
 }
 
 int Simulation::report_severity(const std::string& msg) {
@@ -213,11 +272,40 @@ int Simulation::report_severity(const std::string& msg) {
 }
 
 Simulation::RunResult Simulation::run(uint64_t ticks) {
+    RunResult r = start(ticks);
+    while (r.status == RunStatus::Yielded)
+        r = resume();
+    return r;
+}
+
+// The hook on the kernel's signal-update phase: do the updates, then, in a
+// run, pause the kernel until the next resume(). The design's initialization
+// (xsi_open) and finalization (xsi_close) have deltas too; those pass.
+void Simulation::on_active_events(void* eventq) {
+    Simulation* s = t_current;
+    s->kernel_->process_active_events(eventq);
+    if (!s->running_)
+        return;
+    s->suspended_ = true;
+    s->main_ = std::move(s->main_).resume();
+}
+
+Simulation::RunResult Simulation::start(uint64_t ticks) {
     if (finished_)
         return {RunStatus::Finished, "simulation finished"};
-    const uint64_t target = time() + ticks;
-    uint64_t now = time();
-    kernel_->xsi_run(handle_, target > now ? target - now : 0);
+    run_ticks_ = ticks;
+    return resume();
+}
+
+Simulation::RunResult Simulation::resume() {
+    Current current(this);
+    run_ = std::move(run_).resume();
+    if (suspended_)
+        return {RunStatus::Yielded, ""};
+    return after_run();
+}
+
+Simulation::RunResult Simulation::after_run() {
     std::string err = last_error();
     int st = kernel_->xsi_get_status(handle_);
     if (st == xsiError || st == xsiFatalError)

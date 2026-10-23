@@ -13,3 +13,6 @@ __pycache__/
 *.work/
 .dockerenv*
 work/
+bench/neorv32/neorv32-*/
+bench/neorv32/out/
+bench/neorv32/uart0.txt

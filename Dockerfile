@@ -7,6 +7,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 		ca-certificates \
 		cmake \
 		flex \
+		libboost-context-dev \
 		libdw-dev \
 		libffi-dev \
 		libpixman-1-0 \

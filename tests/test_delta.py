@@ -22,6 +22,11 @@ CASES = {
     ),
     # a zero-time pulse on an output is an event outside the core too
     "glitch": Case([Core("glitch", "glitch")], "tb_glitch.vhd", "tb_glitch", "100ns"),
+    # the number of deltas from a clock edge outside the core to a registered
+    # output's change is the core's own: two for regcomb
+    "latency": Case(
+        [Core("regcomb", "regcomb")], "tb_latency.vhd", "tb_latency", "100ns"
+    ),
 }
 
 
@@ -30,10 +35,6 @@ def test_native(name, nvc, tmp_path):
     run_native(CASES[name], nvc, tmp_path)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the bridge runs the core to quiescence and deposits all its outputs in one delta",
-)
 @pytest.mark.parametrize("name", CASES)
 def test_bridge(name, nvc, build, bridge_env, designs, tmp_path):
     run_case(CASES[name], nvc, build, bridge_env, designs, tmp_path)

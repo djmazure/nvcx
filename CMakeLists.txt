@@ -18,9 +18,10 @@ include(GNUInstallDirs)
 add_library(nvcx_warnings INTERFACE)
 target_compile_options(nvcx_warnings INTERFACE -Wall -Wextra -Wno-missing-field-initializers -Werror)
 
-# Core
+# Core (the kernel runs on a Boost.Context fiber)
+find_package(Boost CONFIG REQUIRED COMPONENTS context)
 add_library(nvcx_core STATIC src/core/kernel.cpp src/core/vivado.cpp src/core/simulation.cpp)
-target_link_libraries(nvcx_core PUBLIC ${CMAKE_DL_LIBS} PRIVATE nvcx_warnings)
+target_link_libraries(nvcx_core PUBLIC ${CMAKE_DL_LIBS} Boost::context PRIVATE nvcx_warnings)
 target_include_directories(nvcx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # VHPI plugin for NVC

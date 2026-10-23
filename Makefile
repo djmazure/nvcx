@@ -1,7 +1,7 @@
 # This is a wrapper for Makefile dinosaurs (...me). Integrate using CMake
 # instead.
 
-.PHONY: all configure pytest test hello shell format clean
+.PHONY: all configure pytest test hello bench shell format clean
 
 all: configure
 	cmake --build build -j
@@ -15,6 +15,9 @@ pytest: all
 
 hello:
 	$(MAKE) -C hello
+
+bench:
+	$(MAKE) -C bench/neorv32 bench
 
 test shell:
 	$(MAKE) -C tests $@

@@ -65,6 +65,13 @@ class Kernel {
     void** globalDesignProperties = nullptr;
     void** globalEventQueue = nullptr;
 
+    // ISIMK::EventQ::processActiveEvents, the signal-update phase that opens
+    // every delta cycle. The scheduler calls it through the kernel's own PLT,
+    // so a function written into its GOT slot sees every delta boundary; the
+    // hook must call process_active_events itself.
+    void (*process_active_events)(void*) = nullptr;
+    void hook_active_events(void (*hook)(void*));
+
     // The kernel's release, "2026.1", from ISIM::VersionUtils::populateVersion
     // (2025.2 and later, else "".)
     std::string version;

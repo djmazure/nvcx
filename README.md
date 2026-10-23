@@ -38,16 +38,27 @@ If you're curious, try "hello":
   simulation kernel and xsim for the "mop-up" terminal IPs, I can make use of
   VHPI, PSL, FST/VCD, cocotb, et cetera.
 
+## Timing
+
+NVC and each xsim cores advance in lockstep. The plugin pauses the xsim kernel
+at every delta boundary (a hook on the kernel's signal-update phase, with the
+kernel running on a coroutine), writes the inputs NVC changed in its delta,
+lets the kernel run one delta, and deposits the outputs that changed for NVC's
+next delta. Each side sees the other's assignments one delta after they were
+made, as it would in a single simulator. Deltas in which no core output changes
+while NVC has nothing pending run without an NVC cycle, since nothing on NVC's
+side could have happened in them.  `tests/test_delta.py` checks
+delta-cycle properties against NVC simulating the same cores natively.
+
+I suspect this is not a 100% rigorous reproduction of the delta-cycle semantics
+of a single simulator kernel.  I also suspect it doesn't matter under
+conventional (synchronous) design practice. I'm not a simulator expert, so you
+are (unfortunately) going to have to convince yourself. If you do, regardless
+of your conclusions, drop me a note.
+
 ## Build and test
 
-Building needs CMake and a C++20 compiler. Running needs Vivado
-(`XILINX_VIVADO`) set; the simulator kernel and its libraries are loaded from
-the installation in place) and NVC built with `--enable-tcl` and the patches in
-contrib/ applied.  Python is needed for the test suite.
-
-`make install` puts the plugin `libnvcx.so` and the bridge stub in `lib/nvcx/`,
-and `nvcx.vhd` with the Tcl scripts in `share/nvcx/`; a build tree has all of
-them side by side in `build/`.
+The test suite is Dockerized and is therefore fairly portable:
 
     $ make
     $ source /opt/xilinx/2026.1/Vivado/settings64.sh
@@ -55,6 +66,18 @@ them side by side in `build/`.
     [...eventually...]
     ..................                                               [100%]
     18 passed in 115.76s (0:01:55)
+
+## Benchmark
+
+`make bench` runs NEORV32 through its bootloader's UART console three ways:
+
+- everything in NVC,
+- everything in xsim, and
+- the processor in xsim behind an nvcx shell with the testbench in NVC.
+
+The console transcript and the cycle count must be identical in order for the
+underlying simulations to be correct. Wall times are an indication of the
+relative performance of each engine.
 
 ## Disclaimer
 

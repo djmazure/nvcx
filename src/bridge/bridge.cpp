@@ -7,6 +7,16 @@
 //
 // ...which loads the snapshot into a private copy of the xsim kernel (one per
 // instance) and finds the shell's ports by name through VHPI.
+//
+// Timing: the two simulators advance in lockstep, one delta cycle each. At the
+// end of every NVC delta's process phase the plugin writes the inputs that
+// changed in that delta into the kernel and lets it run one delta: its
+// processes, then its signal updates. The outputs that changed are deposited
+// onto the shell for NVC's next delta. Each side therefore sees the other's
+// assignments one delta after they were made, exactly as in one simulator.
+// When NVC has no delta pending, the kernels still in the middle of the time
+// step run on without it until one changes an output: nothing could have
+// happened on NVC's side in the deltas skipped.
 
 #include <cstdlib>
 #include <cstring>
@@ -48,10 +58,24 @@ struct Instance {
     uint64_t fs_per_tick = 1;
     bool finished_reported = false;
     vhpiHandleT timeout = nullptr; // pending after-delay callback, if any
+    bool dirty = false;            // an input changed in this NVC delta
+    bool due = false;              // the kernel's next event is at this time
+    bool active = false;           // listed in g_active
 };
 
 std::vector<std::unique_ptr<Instance>> g_instances;
-void step(Instance& in);
+// the instances with something to do: an input changed, a timer fired, or
+// the kernel is in the middle of a time step
+std::vector<Instance*> g_active;
+
+void activate(Instance& in) {
+    if (!in.active) {
+        in.active = true;
+        g_active.push_back(&in);
+    }
+}
+
+bool step(Instance& in);
 
 [[noreturn]]
 void fail(const std::string& msg) {
@@ -106,7 +130,7 @@ fs::path resolve_snapshot(const std::string& name,
     // the kernel needs xsimk.so with the metadata beside it, in an xsim.dir
     if (!fs::is_regular_file(fs::path(snapshot) / "xsimk.so")) {
         fail(std::format("snapshot directory {} has no xsimk.so (elaborate "
-                         "with xelab -debug all -dll)",
+                         "with xelab -dll)",
                          snapshot));
     }
     return fs::path(snapshot) / "xsimk.so";
@@ -293,15 +317,52 @@ void on_timeout(const vhpiCbDataT* cb) {
     Instance& in = *static_cast<Instance*>(cb->user_data);
     vhpi_release_handle(in.timeout);
     in.timeout = nullptr;
-    step(in);
+    in.due = true;
+    activate(in);
 }
 
 void on_input_change(const vhpiCbDataT* cb) {
-    step(*static_cast<Instance*>(cb->user_data));
+    Instance& in = *static_cast<Instance*>(cb->user_data);
+    in.dirty = true;
+    activate(in);
 }
 
-void step(Instance& in) {
+// One kernel delta for every active instance; those still in the middle of
+// the time step stay active. True if any output was deposited.
+bool step_active() {
+    std::vector<Instance*> active;
+    active.swap(g_active);
+    bool deposited = false;
+    for (Instance* in : active) {
+        in->active = false;
+        deposited |= step(*in);
+        if (in->sim->suspended()) {
+            activate(*in);
+        }
+    }
+    return deposited;
+}
+
+// At the end of each NVC delta's process phase
+void on_end_of_processes(const vhpiCbDataT*) {
+    step_active();
+}
+
+// NVC has no delta pending at this time: the kernels still in the middle of
+// it run on, a delta each in turn, until one changes an output (that deposit
+// gives NVC a delta, and lockstep resumes there) or all are quiescent. In the
+// deltas skipped nothing could have happened on NVC's side: it had nothing
+// to run and no input of theirs could have changed.
+void on_last_known_delta(const vhpiCbDataT*) {
+    while (!g_active.empty() && !step_active()) {
+    }
+}
+
+bool step(Instance& in) {
     Simulation& d = *in.sim;
+    if (!in.dirty && !in.due && !d.suspended()) {
+        return false;
+    }
     vhpiTimeT now{};
     vhpi_get_time(&now, nullptr);
     uint64_t now_fs = ((uint64_t)now.high << 32) | now.low;
@@ -314,43 +375,69 @@ void step(Instance& in) {
                          in.fs_per_tick));
     }
     uint64_t target = now_fs / in.fs_per_tick;
-    if (target > d.time()) {
-        auto r = d.run(target - d.time());
-        if (r.status == Simulation::RunStatus::Error) {
-            fail(in.name + ": " + r.message);
+    using Status = Simulation::RunStatus;
+    Simulation::RunResult r{Status::Completed, ""};
+    // Bring the kernel to this time, paused after the signal updates of its
+    // first delta here (its own events) and before their processes. A pause
+    // at an earlier time has nothing for NVC: nothing was scheduled there.
+    if (!d.suspended()) {
+        r = d.start(target > d.time() ? target - d.time() : 0);
+        while (r.status == Status::Yielded && d.time() < target) {
+            r = d.resume();
         }
     }
-    for (Port& p : in.ins) {
-        std::vector<uint8_t> raw = read_port(in, p);
-        if (raw != p.last) {
-            d.put(*p.xp, raw.data());
-            p.last = raw;
+    // the inputs this delta changed, for the processes about to run (the
+    // value-change callbacks say whether there are any; reading them all
+    // through VHPI is the costly part of a step)
+    bool changed = false;
+    if (in.dirty) {
+        for (Port& p : in.ins) {
+            std::vector<uint8_t> raw = read_port(in, p);
+            if (raw != p.last) {
+                d.put(*p.xp, raw.data());
+                p.last = raw;
+                changed = true;
+            }
         }
     }
-    auto r = d.run(0);
-    if (r.status == Simulation::RunStatus::Error) {
+    in.dirty = false;
+    in.due = false;
+    // one delta: the processes, then the updates they schedule
+    if (d.suspended()) {
+        r = d.resume();
+    } else if (changed) {
+        r = d.start(0);
+        if (r.status == Status::Yielded) {
+            r = d.resume();
+        }
+    }
+    if (r.status == Status::Error) {
         fail(in.name + ": " + r.message);
     }
-    if (r.status == Simulation::RunStatus::Finished && !in.finished_reported) {
+    if (r.status == Status::Finished && !in.finished_reported) {
         in.finished_reported = true;
         vhpi_printf("nvcx: %s: the core finished its simulation; its outputs "
                     "are frozen",
                     in.name.c_str());
     }
+    bool deposited = false;
     for (Port& p : in.outs) {
         std::vector<uint8_t> raw(p.xp->raw_size());
         d.get(*p.xp, raw.data());
         if (raw != p.last) {
             write_port(in, p, raw);
             p.last = raw;
+            deposited = true;
         }
     }
-    // the kernel's next event becomes an after-delay callback (replacing any
-    // pending one)
     if (in.timeout) {
         vhpi_remove_cb(in.timeout);
         in.timeout = nullptr;
     }
+    if (r.status == Status::Yielded) {
+        return deposited; // more deltas at this time
+    }
+    // quiescent: the kernel's next event becomes an after-delay callback
     uint64_t next;
     if (d.next_event_time(next) && !d.finished()) {
         uint64_t delay_fs =
@@ -366,6 +453,7 @@ void step(Instance& in) {
             fail(in.name + ": cannot register the after-delay callback");
         }
     }
+    return deposited;
 }
 
 void exec_open(const vhpiCbDataT* cb) {
@@ -464,10 +552,17 @@ void exec_open(const vhpiCbDataT* cb) {
                 p.name()));
         }
     }
-    step(in);
+    // Initial values now: the cycle callbacks do not run during
+    // initialization, and nothing on NVC's side can see the core until its
+    // first delta, so its initialization runs on until an output changes.
+    in.dirty = true;
+    activate(in);
+    while (in.active && !step_active()) {
+    }
 }
 
 void end_of_sim(const vhpiCbDataT*) {
+    g_active.clear();
     for (auto& inst : g_instances) {
         inst->sim.reset();
     }
@@ -489,6 +584,22 @@ void startup() {
     }
     vhpiCbDataT cb{.reason = vhpiCbEndOfSimulation, .cb_rtn = end_of_sim};
     vhpi_register_cb(&cb, 0);
+    vhpiCbDataT eop{.reason = vhpiCbRepEndOfProcesses,
+                    .cb_rtn = on_end_of_processes};
+    vhpiHandleT h = vhpi_register_cb(&eop, vhpiReturnCb);
+    if (!h) {
+        vhpi_printf("nvcx: cannot register the end-of-processes callback");
+        return;
+    }
+    vhpi_release_handle(h);
+    vhpiCbDataT lkd{.reason = vhpiCbRepLastKnownDeltaCycle,
+                    .cb_rtn = on_last_known_delta};
+    h = vhpi_register_cb(&lkd, vhpiReturnCb);
+    if (!h) {
+        vhpi_printf("nvcx: cannot register the last-known-delta callback");
+        return;
+    }
+    vhpi_release_handle(h);
 }
 
 } // namespace

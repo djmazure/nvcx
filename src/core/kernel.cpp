@@ -3,6 +3,7 @@
 #include "nvcx/vivado.hpp"
 #include <cxxabi.h>
 #include <dlfcn.h>
+#include <link.h>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -119,6 +120,11 @@ void Kernel::resolve_all() {
     // ISIMK::GlobalEventQueue
     resolve(h, globalEventQueue, "_ZN5ISIMK16GlobalEventQueueE");
 
+    resolve(h,
+            process_active_events,
+            "_ZN5ISIMK6EventQ19processActiveEventsEv",
+            "ISIMK::EventQ::processActiveEvents()");
+
     // optional: older kernels have no version string
     // ISIM::VersionUtils::populateVersion(char*, int)
     auto populateVersion = reinterpret_cast<void (*)(char*, int)>(
@@ -140,6 +146,50 @@ bool Kernel::next_event_time(uint64_t& t) const {
         return false;
     t = *reinterpret_cast<const uint64_t*>(slot + nvcx::abi::TIMESLOT_TIME);
     return true;
+}
+
+void Kernel::hook_active_events(void (*hook)(void*)) {
+    // The slot is the R_X86_64_JUMP_SLOT relocation for the symbol, found in
+    // the loaded copy's dynamic section (the loader has already rebased the
+    // table addresses).
+    const char* const sym = "_ZN5ISIMK6EventQ19processActiveEventsEv";
+    link_map* lm = nullptr;
+    if (dlinfo(handle_, RTLD_DI_LINKMAP, &lm) != 0 || !lm)
+        throw std::runtime_error("cannot read the kernel's link map");
+    const ElfW(Rela)* rela = nullptr;
+    size_t rela_size = 0;
+    const ElfW(Sym)* symtab = nullptr;
+    const char* strtab = nullptr;
+    for (const ElfW(Dyn)* d = lm->l_ld; d->d_tag != DT_NULL; d++) {
+        switch (d->d_tag) {
+        case DT_JMPREL:
+            rela = reinterpret_cast<const ElfW(Rela)*>(d->d_un.d_ptr);
+            break;
+        case DT_PLTRELSZ:
+            rela_size = d->d_un.d_val;
+            break;
+        case DT_SYMTAB:
+            symtab = reinterpret_cast<const ElfW(Sym)*>(d->d_un.d_ptr);
+            break;
+        case DT_STRTAB:
+            strtab = reinterpret_cast<const char*>(d->d_un.d_ptr);
+            break;
+        }
+    }
+    if (!rela || !symtab || !strtab)
+        throw std::runtime_error("the kernel has no PLT relocations");
+    for (size_t i = 0; i < rela_size / sizeof(ElfW(Rela)); i++) {
+        if (ELF64_R_TYPE(rela[i].r_info) != R_X86_64_JUMP_SLOT)
+            continue;
+        const ElfW(Sym) & s = symtab[ELF64_R_SYM(rela[i].r_info)];
+        if (std::strcmp(strtab + s.st_name, sym) != 0)
+            continue;
+        auto* slot = reinterpret_cast<void**>(lm->l_addr + rela[i].r_offset);
+        *slot = reinterpret_cast<void*>(hook);
+        return;
+    }
+    throw std::runtime_error(
+        std::format("the kernel does not call {} through its PLT", sym));
 }
 
 void Kernel::discover_offsets() {

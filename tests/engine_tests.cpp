@@ -200,6 +200,42 @@ void test_verilog_on_instance_copy() {
     }
 }
 
+void test_delta_steps() {
+    // The kernel pauses after each delta's signal updates: clkgen's own
+    // clock edge and the counter registered on it arrive in separate pauses,
+    // clock first.
+    Simulation d(snap("clkgen"), g_kernel);
+    CHECK(d.run(0).status == Simulation::RunStatus::Completed);
+    std::vector<std::pair<std::string, std::string>> seen; // clk_out, cnt_out
+    Simulation::RunResult r = d.start(5000);
+    while (r.status == Simulation::RunStatus::Yielded) {
+        CHECK(d.suspended());
+        if (d.time() == 5000)
+            seen.push_back({logic(d, "clk_out"), logic(d, "cnt_out")});
+        r = d.resume();
+    }
+    CHECK(r.status == Simulation::RunStatus::Completed);
+    CHECK(!d.suspended() && d.time() == 5000);
+    size_t edge = seen.size(), count = seen.size();
+    for (size_t i = 0; i < seen.size(); i++) {
+        if (edge == seen.size() && seen[i].first == "1")
+            edge = i;
+        if (count == seen.size() && seen[i].second == bits(1, 8))
+            count = i;
+    }
+    if (edge >= seen.size() || count >= seen.size() || edge >= count) {
+        std::string trace;
+        for (auto& [c, n] : seen)
+            trace += std::format(" [{} {}]", c, n);
+        throw std::runtime_error(
+            std::format("clock edge at pause {}, count at pause {}:{}",
+                        edge,
+                        count,
+                        trace));
+    }
+    CHECK(seen[edge].second == bits(0, 8));
+}
+
 void test_version_mismatch_refused() {
     // a snapshot's xsim.version must match the kernel's release; the kernel
     // itself does not check (and fails obscurely)
@@ -251,6 +287,7 @@ const std::map<std::string, std::function<void()>> TESTS = {
     {"verilog_values", test_verilog_values},
     {"run_zero_applies_deposits", test_run_zero_applies_deposits},
     {"verilog_on_instance_copy", test_verilog_on_instance_copy},
+    {"delta_steps", test_delta_steps},
     {"second_live_design_refused", test_second_live_design_refused},
 };
 

@@ -72,7 +72,7 @@ def bridge_env(vivado):
 @pytest.fixture(scope="session")
 def designs(vivado, tmp_path_factory):
     """designs(name) -> the snapshot directory (xsim.dir/<name>) of that test design, elaborated on
-    first use (-debug all -dll produces the metadata the engine reads); designs.all() elaborates
+    first use (xelab -dll); designs.all() elaborates
     every design and returns the session directory holding xsim.dir."""
     out = tmp_path_factory.mktemp("rtl")
     done = {}
@@ -88,7 +88,7 @@ def designs(vivado, tmp_path_factory):
                 stdout=subprocess.DEVNULL,
             )
             subprocess.run(
-                ["xelab", "-debug", "all", "-dll", f"work.{top}", "-s", name],
+                ["xelab", "-dll", f"work.{top}", "-s", name],
                 cwd=out,
                 check=True,
                 stdout=subprocess.DEVNULL,

@@ -1,0 +1,339 @@
+# nvcx: NVC's side of the Tcl flow.
+#
+# At this point in the flow, NVC has parsed and elaborated the overall design
+# enough that we can walk it and identify cores needing to connect to XSI.
+# When we find these cores,
+# 
+# - emit a VHDL shell containing a bridge component for NVC
+# - run xelab on the underlying component for XSI
+#
+# ...which allows the gap between NVC and xsim to be closed. After that,
+# the generated VHDL shells need to be elaborated by NVC and the simulator
+# can start.
+
+package provide nvcx 1.0
+package require sha256
+package require fileutil
+package require cmdline
+
+namespace eval nvcx {
+    # Component instances, collected on first use
+    variable found {}
+
+    # Snapshot cache, and the plugin's per-instance kernel copies
+    proc workdir {} {
+        if {[info exists ::env(NVCX_WORK)] && $::env(NVCX_WORK) ne ""} {
+            return $::env(NVCX_WORK)
+        }
+        return nvcx.work
+    }
+
+    # "2026.1" from $XILINX_VIVADO's path, else "unknown"
+    proc vivado_version {} {
+        if {[info exists ::env(XILINX_VIVADO)]
+            && [regexp {\d{4}\.\d+} $::env(XILINX_VIVADO) v]} {
+            return $v
+        }
+        return unknown
+    }
+
+    # The snapshot of LIBRARY.ENTITY elaborated with ELAB (xelab arguments)
+    # and the generics TEXT (NAME=VALUE per line, each a -generic_top): its
+    # directory xsim.dir/ENTITY in the cache, running xelab on a miss. A
+    # finished temporary directory is renamed into place, so a half-written
+    # snapshot is never seen and concurrent scripts cannot clash: whoever
+    # renames first wins and the other uses that.
+    proc elaborate {library entity elab text} {
+        set snapshot "$library.$entity"
+        set key "$snapshot|$elab|$text|[vivado_version]"
+        set snapshots [file join [workdir] snapshots]
+        set dir [file join $snapshots "$entity-[::sha2::sha256 -hex -- $key]"]
+        set so [file join $dir xsim.dir $entity xsimk.so]
+        if {[file exists $so]} { return [file normalize [file dirname $so]] }
+        file mkdir $snapshots
+        set tmp [::fileutil::maketempdir -prefix "[file tail $dir]." -dir $snapshots]
+        ::fileutil::writeFile [file join $tmp key.txt] $key
+        set args [list -debug all -dll {*}$elab]
+        foreach g [split $text "\n"] {
+            if {$g ne ""} { lappend args -generic_top $g }
+        }
+        lappend args --snapshot $entity $snapshot
+        set xelab xelab
+        if {[info exists ::env(XILINX_VIVADO)]} {
+            set xelab [file join $::env(XILINX_VIVADO) bin xelab]
+        }
+        set log [file normalize [file join $tmp xelab.log]]
+        set cwd [pwd]
+        cd $tmp
+        set failed [catch {exec $xelab {*}$args >& xelab.log} msg]
+        cd $cwd
+        if {$failed} {
+            error "xelab failed for $snapshot ($msg); see $log"
+        }
+        if {![file exists [file join $tmp xsim.dir $entity xsimk.so]]} {
+            error "xelab wrote no snapshot for $snapshot; see $log"
+        }
+        if {[catch {file rename $tmp $dir}]} {
+            file delete -force $tmp
+            if {![file exists $so]} { error "cannot publish $dir" }
+        }
+        return [file normalize [file dirname $so]]
+    }
+
+    # VHDL for the string TEXT, one literal per line joined with LF.
+    proc vhdl_lines {text} {
+        set parts {}
+        foreach line [split $text "\n"] {
+            lappend parts "\"[string map {\" \"\"} $line]\""
+        }
+        return [join $parts " & LF & "]
+    }
+
+    # VHPI base type name -> the VHDL spelling a shell may use for a port
+    # (arrays unconstrained: the width comes from the actual) and for a
+    # generic.
+    proc port_type {base} {
+        switch -- $base {
+            STD_ULOGIC         { return std_ulogic }
+            STD_ULOGIC_VECTOR  { return std_ulogic_vector }
+            UNRESOLVED_UNSIGNED { return unsigned }
+            UNRESOLVED_SIGNED  { return signed }
+            UNSIGNED           { return unsigned }
+            SIGNED             { return signed }
+            BIT                { return bit }
+            BIT_VECTOR         { return bit_vector }
+            INTEGER            { return integer }
+            REAL               { return real }
+            BOOLEAN            { return boolean }
+        }
+        error "port type $base is not supported"
+    }
+    proc generic_type {base} {
+        switch -- $base {
+            INTEGER { return integer }
+            STRING  { return string }
+            REAL    { return real }
+            BOOLEAN { return boolean }
+        }
+        error "generic type $base is not supported"
+    }
+    # A generic's value as VHDL source, and as the text the shell's GENERICS
+    # expression yields for it at run time (what the snapshot table matches).
+    proc generic_literal {type value} {
+        switch -- $type {
+            string  { return "\"$value\"" }
+            boolean { return [string tolower $value] }
+            real    { return [generic_text real $value] }
+            default { return $value }
+        }
+    }
+    proc generic_text {type value} {
+        switch -- $type {
+            boolean { return [string tolower $value] }
+            real    {
+                # NVC's real'image: the shortest round-trip form, no ".0"
+                set v [expr {double($value)}]
+                return [regsub {\.0$} $v ""]
+            }
+            default { return $value }
+        }
+    }
+    proc generic_image {type name} {
+        switch -- $type {
+            string  { return $name }
+            default { return "${type}'image($name)" }
+        }
+    }
+
+    # Every component instance under *h*, bound or not: component name ->
+    # list of {generics ports fullname}, one per instance, where generics is
+    # a list of {name type value} and ports a list of {name mode type}.
+    proc collect {h found_var} {
+        upvar 1 $found_var found
+        # only a component instance has a component name (contrib patch)
+        set comp ""
+        catch { set comp [string tolower [vhpi::get_str CompName $h]] }
+        if {$comp ne ""} {
+            set generics {}
+            foreach g [vhpi::iterate GenericDecls $h] {
+                set type [generic_type [vhpi::get_str Name [vhpi::handle BaseType $g]]]
+                # the name as declared: a Verilog parameter is case-sensitive for -generic_top
+                lappend generics [list [vhpi::get_str Name $g] $type [vhpi::get_value $g]]
+            }
+            set ports {}
+            foreach p [vhpi::iterate PortDecls $h] {
+                set mode [vhpi::get Mode $p]
+                if {$mode == 1001} { set mode in } elseif {$mode == 1002} { set mode out } else {
+                    error "[vhpi::get_str FullName $h]: port [vhpi::get_str Name $p]: only in and out ports are supported"
+                }
+                set type [port_type [vhpi::get_str Name [vhpi::handle BaseType $p]]]
+                lappend ports [list [string tolower [vhpi::get_str Name $p]] $mode $type]
+            }
+            dict lappend found $comp [list $generics $ports [vhpi::get_str FullName $h]]
+        }
+        foreach r [vhpi::iterate InternalRegions $h] { collect $r found }
+    }
+
+    # Write the shell for component *name* to channel *chan*: *what* is
+    # {snapshot DIR} or {library LIB ELAB TABLE} with TABLE a dict generics
+    # text -> snapshot directory; *instances* the list collect built.
+    proc emit_shell {chan name what instances} {
+        lassign [lindex $instances 0] generics ports
+        lassign $what kind arg elab table
+        puts $chan "-- Generated by nvcx.tcl for component $name, from NVC's view of its declaration."
+        switch -- $kind {
+            snapshot {
+                puts $chan "-- Simulates the xsim snapshot $arg. Its generics were fixed when it was"
+                puts $chan "-- elaborated: the instantiation's values are the defaults here."
+            }
+            library {
+                puts $chan "-- Generics are chosen at the instantiation point; nvcx.tcl elaborated a"
+                puts $chan "-- snapshot for each set the design uses (xelab $elab)."
+            }
+        }
+        puts $chan "library ieee;"
+        puts $chan "use ieee.std_logic_1164.all;"
+        puts $chan "use ieee.numeric_std.all;"
+        puts $chan "library nvcx;"
+        puts $chan ""
+        puts $chan "entity $name is"
+        if {[llength $generics]} {
+            set lines {}
+            foreach g $generics {
+                lassign $g gname gtype gvalue
+                lappend lines "        $gname : $gtype := [generic_literal $gtype $gvalue]"
+            }
+            puts $chan "    generic ("
+            puts $chan [join $lines ";\n"]
+            puts $chan "    );"
+        }
+        set lines {}
+        foreach p $ports {
+            lassign $p pname pmode ptype
+            lappend lines "        $pname : $pmode $ptype"
+        }
+        puts $chan "    port ("
+        puts $chan [join $lines ";\n"]
+        puts $chan "    );"
+        puts $chan "end entity;"
+        puts $chan ""
+        puts $chan "architecture xsim of $name is"
+        if {$kind eq "snapshot"} {
+            puts $chan "begin"
+            puts $chan "    core : entity nvcx.bridge generic map (SNAPSHOT => \"[file normalize $arg]\");"
+        } else {
+            # the instantiation's generics as the NAME=VALUE lines the
+            # snapshot table is keyed by
+            set parts {}
+            foreach g $generics {
+                lassign $g gname gtype
+                lappend parts "\"$gname=\" & [generic_image $gtype $gname]"
+            }
+            if {![llength $parts]} { set parts {{""}} }
+            puts $chan "    constant GENERICS : string :="
+            puts $chan "        [join $parts "\n        & LF & "];"
+            puts $chan "    -- the snapshot elaborated for this instantiation's generics (\"\" if none)"
+            puts $chan "    function nvcx_snapshot return string is"
+            puts $chan "    begin"
+            dict for {text dir} $table {
+                puts $chan "        if GENERICS = [vhdl_lines $text] then"
+                puts $chan "            return \"$dir\";"
+                puts $chan "        end if;"
+            }
+            puts $chan "        return \"\";"
+            puts $chan "    end function;"
+            puts $chan "begin"
+            puts $chan "    core : entity nvcx.bridge"
+            puts $chan "        generic map (SNAPSHOT => nvcx_snapshot, GENERICS => GENERICS);"
+        }
+        puts $chan "end architecture;"
+    }
+
+    # The GENERICS text an instance's values produce at run time.
+    proc generics_text {generics} {
+        set parts {}
+        foreach g $generics {
+            lassign $g gname gtype gvalue
+            lappend parts "$gname=[generic_text $gtype $gvalue]"
+        }
+        return [join $parts "\n"]
+    }
+
+    # The component instances of the elaborated design, by component name
+    # (lower case): name -> list of {generics ports fullname}.
+    proc instances {} {
+        variable found
+        if {![dict size $found]} {
+            set found [dict create]
+            collect [vhpi::handle RootInst 0] found
+        }
+        return $found
+    }
+
+    # nvcx::write_shell -component NAME -output FILE
+    #                   (-snapshot DIR | -library LIB ?-elab ARGS?)
+    #
+    # Writes the VHDL shell for the component NAME to FILE and, for -library,
+    # elaborates the snapshot LIB.NAME for every generic set the design
+    # instantiates it with (ARGS to xelab; default "-L LIB"). -snapshot names
+    # a snapshot elaborated already (xsim.dir/NAME), whose generics the
+    # instantiation must leave at their values.
+    proc write_shell {args} {
+        set options {
+            {component.arg "" "the component, as declared in the design"}
+            {output.arg    "" "the VHDL shell to write"}
+            {snapshot.arg  "" "a snapshot xelab -dll wrote already (xsim.dir/<name>)"}
+            {library.arg   "" "or: elaborate LIBRARY.<component> for each generic set"}
+            {elab.arg      "" "xelab arguments with -library (default: -L LIBRARY)"}
+        }
+        set usage "-component NAME -output FILE (-snapshot DIR | -library LIB ?-elab ARGS?)"
+        if {[catch {::cmdline::getoptions args $options $usage} result]} {
+            error "nvcx::write_shell: $result"
+        }
+        array set opt $result
+        if {[llength $args]} {
+            error "nvcx::write_shell: unexpected arguments: $args"
+        }
+        set name [string tolower $opt(component)]
+        set path $opt(output)
+        set snapshot $opt(snapshot)
+        set library $opt(library)
+        set elab $opt(elab)
+        if {$name eq "" || $path eq ""} {
+            error "nvcx::write_shell: wants -component NAME and -output FILE"
+        }
+        if {($snapshot eq "") == ($library eq "")} {
+            error "nvcx::write_shell $name: wants exactly one of -snapshot DIR or -library LIB"
+        }
+        if {$snapshot ne "" && $elab ne ""} {
+            error "nvcx::write_shell $name: -elab only applies with -library"
+        }
+        set all [instances]
+        if {![dict exists $all $name]} {
+            error "nvcx::write_shell $name: the design instantiates no component of that name (components: [join [dict keys $all] ", "])"
+        }
+        set instances [dict get $all $name]
+        if {$snapshot ne ""} {
+            set what [list snapshot $snapshot]
+        } else {
+            if {$elab eq ""} { set elab "-L $library" }
+            # one snapshot per distinct generic set, cached across runs
+            set table [dict create]
+            foreach inst $instances {
+                lassign $inst generics ports full
+                set text [generics_text $generics]
+                if {[dict exists $table $text]} continue
+                puts "nvcx: elaborating $library.$name for $full"
+                set dir [elaborate $library $name $elab $text]
+                puts "nvcx:   $dir"
+                dict set table $text $dir
+            }
+            set what [list library $library $elab $table]
+        }
+        set chan [open $path w]
+        emit_shell $chan $name $what $instances
+        close $chan
+        puts "nvcx: $path ([llength $instances] instance[expr {[llength $instances] == 1 ? "" : "s"}])"
+        return $path
+    }
+}

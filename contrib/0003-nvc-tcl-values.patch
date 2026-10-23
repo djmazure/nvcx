@@ -1,0 +1,31 @@
+Tcl: let vhpi::get_value return string and real values
+
+wrap_get_value converts logic and enumeration values through vhpiStrVal but has
+no case for objects whose natural format already is vhpiStrVal (string generics
+and constants) nor for vhpiRealVal, and reports "unhandled value format" for
+them. Strings take the existing path; reals become a Tcl double. Against nvc
+1.23.0.
+
+--- a/src/tcl/tcl-vhpi.c
++++ b/src/tcl/tcl-vhpi.c
+@@ -716,6 +716,7 @@
+    case vhpiLogicVecVal:
+    case vhpiSmallEnumVal:
+    case vhpiEnumVal:
++   case vhpiStrVal:
+       {
+          vhpiCharT smallbuf[16];
+          val.value.str = smallbuf;
+@@ -745,6 +746,12 @@
+          Tcl_SetObjResult(interp, obj);
+          return TCL_OK;
+       }
++   case vhpiRealVal:
++      {
++         Tcl_Obj *obj = Tcl_NewDoubleObj(val.value.real);
++         Tcl_SetObjResult(interp, obj);
++         return TCL_OK;
++      }
+    default:
+       {
+          Tcl_Obj *msg = Tcl_ObjPrintf("unhandled value format %d", val.format);

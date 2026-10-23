@@ -1,0 +1,46 @@
+VHPI: vhpiCompNameP on component instances
+
+A component instance that no entity binds (legal VHDL: the instance is left
+open) is still a region with its generics and ports, but nothing identified
+the component it instantiates: vhpiNameP is the label, there is no design unit,
+and vhpiCompNameP was unsupported. Remember the component declaration's name on
+the compInstStmt and return it for vhpiCompNameP, so a tool can learn from the
+elaborated design which components want an implementation. Applies on top of
+0001-nvc-foreign-in-component-instance.patch, against nvc 1.23.0.
+
+--- a/src/vhpi/vhpi-model.c
++++ b/src/vhpi/vhpi-model.c
+@@ -456,6 +456,7 @@
+    c_designInstUnit designInstUnit;
+    c_stmt           stmt;
+    tree_t           outer;   // the instance block itself; region.object.tree is the inner block
++   vhpiCharT       *CompName;
+ } c_compInstStmt;
+ 
+ DEF_CLASS(compInstStmt, vhpiCompInstStmtK, designInstUnit.region.object);
+@@ -3255,6 +3256,14 @@
+ 
+          goto missing_property;
+       }
++   case vhpiCompNameP:
++      {
++         c_compInstStmt *ci = is_compInstStmt(obj);
++         if (ci != NULL && ci->CompName != NULL)
++            return ci->CompName;
++
++         goto missing_property;
++      }
+    case vhpiStrValP:
+       {
+          c_argv *arg = is_argv(obj);
+@@ -4655,6 +4664,10 @@
+    init_stmt(&(c->stmt), t);
+    c->outer = t;
+ 
++   // The component's name is what an unbound instance can be identified by
++   if (tree_kind(inst) == T_COMPONENT)
++      c->CompName = new_string(istr(tree_ident(inst)));
++
+    // Make sure all lookups happen in the implicit inner region
+    (void)vhpi_get_name(&c->designInstUnit.region.object);
+    (void)vhpi_get_full_name(&c->designInstUnit.region.object);

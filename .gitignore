@@ -1,0 +1,15 @@
+build*/
+xsim.dir/
+*.log
+*.jou
+*.pb
+*.wdb
+*.vcd
+*.fst
+/core
+/core.[0-9]*
+__pycache__/
+*.swp
+*.work/
+.dockerenv*
+work/

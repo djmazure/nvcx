@@ -1,0 +1,13 @@
+vivado/
+export_sim/
+*_shell.vhd
+work/
+nvcx/
+xpm/
+nvcx.work/
+tb.fst
+xsim.wdb
+.Xil/
+*.log
+*.jou
+*.pb

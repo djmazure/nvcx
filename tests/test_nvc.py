@@ -114,11 +114,11 @@ CASES = {
 }
 
 
-@pytest.mark.parametrize("name", CASES)
-def test_nvc_case(name, nvc, build, bridge_env, designs, tmp_path):
+def run_case(case, nvc, build, bridge_env, designs, tmp_path):
+    """Run one Case through the bridge: the two NVC passes, nvcx.tcl between
+    them, and the run itself, checking what the Case says to check."""
     from conftest import DESIGNS, RTL
 
-    case = CASES[name]
     env = dict(bridge_env, NVCX_WORK=str(tmp_path / "work"))
     env["PATH"] = f"{Path(env['XILINX_VIVADO']) / 'bin'}:{env['PATH']}"
 
@@ -208,3 +208,37 @@ def test_nvc_case(name, nvc, build, bridge_env, designs, tmp_path):
     r = run()
     if case.check:
         case.check(tmp_path, r)
+    return r
+
+
+def run_native(case, nvc, tmp_path):
+    """The oracle: the same testbench with the cores simulated by NVC itself."""
+    from conftest import DESIGNS, RTL
+
+    sources = [str(RTL / DESIGNS[c.design][1]) for c in case.cores]
+    sources += [str(TB / f) for f in case.sources] + [str(TB / case.tb)]
+    common = [nvc, "--std=2008", f"--work=work:{tmp_path / 'work_lib'}"]
+    r = subprocess.run(
+        [
+            *common,
+            "-a",
+            *sources,
+            "-e",
+            case.top,
+            "-r",
+            f"--stop-time={case.stop}",
+            *case.run_args,
+            case.top,
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    out = r.stdout + r.stderr
+    assert r.returncode == 0 and "PASS" in out, out
+    return r
+
+
+@pytest.mark.parametrize("name", CASES)
+def test_nvc_case(name, nvc, build, bridge_env, designs, tmp_path):
+    run_case(CASES[name], nvc, build, bridge_env, designs, tmp_path)

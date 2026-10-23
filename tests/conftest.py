@@ -22,6 +22,10 @@ DESIGNS = {
     "hier_v": ("sv", "hier.v", "hier"),
     "kinds": ("vhdl", "kinds.vhd", "kinds"),
     "kinds_v": ("sv", "kinds.v", "kinds"),
+    # delta-ordering cores (tests/test_delta.py)
+    "clkgen": ("vhdl", "clkgen.vhd", "clkgen"),
+    "regcomb": ("vhdl", "regcomb.vhd", "regcomb"),
+    "glitch": ("vhdl", "glitch.vhd", "glitch"),
 }
 
 

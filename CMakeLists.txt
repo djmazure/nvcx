@@ -42,6 +42,8 @@ add_custom_target(nvcx_vhd ALL DEPENDS ${CMAKE_BINARY_DIR}/nvcx.vhd)
 
 # Tcl scripts for `nvc --do`, beside the build tree's executable
 file(GLOB NVCX_TCL CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tcl/*.tcl)
+configure_file(tcl/pkgIndex.tcl.in ${CMAKE_BINARY_DIR}/generated/pkgIndex.tcl @ONLY)
+list(APPEND NVCX_TCL ${CMAKE_BINARY_DIR}/generated/pkgIndex.tcl)
 add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/tcl.stamp
   COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/tcl
   COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/tcl
@@ -54,6 +56,15 @@ add_custom_target(nvcx_tcl ALL DEPENDS ${CMAKE_BINARY_DIR}/tcl.stamp)
 add_executable(nvcx-tests tests/engine_tests.cpp)
 target_link_libraries(nvcx-tests PRIVATE nvcx_core nvcx_warnings)
 
+# Tcl searches a TCLLIBPATH directory's subdirectories, so the package goes in nvcx<version>/ under
+# NVCX_TCL_DIR. Packagers can point that at their distribution's Tcl package path.
+set(NVCX_TCL_DIR ${CMAKE_INSTALL_DATADIR}/nvcx/tcl CACHE STRING
+  "Directory (absolute, or relative to the prefix) holding the nvcx Tcl package")
+cmake_path(ABSOLUTE_PATH NVCX_TCL_DIR BASE_DIRECTORY ${CMAKE_INSTALL_PREFIX}
+  OUTPUT_VARIABLE NVCX_TCL_FULL_DIR)
+configure_file(nvcx.pc.in ${CMAKE_BINARY_DIR}/generated/nvcx.pc @ONLY)
+
 install(TARGETS nvcx_plugin wdbstub LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/nvcx)
 install(FILES vhdl/nvcx.vhd DESTINATION ${CMAKE_INSTALL_DATADIR}/nvcx)
-install(DIRECTORY tcl/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nvcx/tcl)
+install(FILES ${NVCX_TCL} DESTINATION ${NVCX_TCL_DIR}/nvcx${PROJECT_VERSION})
+install(FILES ${CMAKE_BINARY_DIR}/generated/nvcx.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)

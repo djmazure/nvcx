@@ -21,19 +21,8 @@ ifeq ($(wildcard /.dockerenv),)
 # Outside Docker: build the image and re-run this Makefile inside it
 #
 
-XILINX_ROOT := $(realpath $(XILINX_VIVADO)/../..)
-
-.PHONY: bench nvc xsim mixed fetch clean
-bench nvc xsim mixed fetch clean:
-	docker build -t nvcx-ci -f ../../Dockerfile ../..
-	docker run --rm --network=host \
-		-u $(shell id -u):$(shell id -g) \
-		-v $(realpath ../..):/work -w /work/bench/neorv32 \
-		-v $(XILINX_ROOT):$(XILINX_ROOT):ro \
-		-v $(HOME)/.Xilinx:/tmp/.Xilinx:ro -e XILINX_VIVADO -e HOME=/tmp \
-		-e PATH=$(XILINX_VIVADO)/bin:/usr/local/bin:/usr/bin:/bin \
-		nvcx-ci \
-		make $@
+DOCKER_TARGETS := bench nvc xsim mixed fetch clean
+include ../../docker.mk
 
 else
 #
@@ -63,9 +52,18 @@ fetch $(NEORV32)/rtl/file_list_core.f:
 	wget -q -O - https://github.com/stnolting/neorv32/archive/refs/tags/v$(NEORV32_VERSION).tar.gz \
 		| tar xz --wildcards '$(NEORV32)/rtl/core/*' '$(NEORV32)/rtl/file_list_core.f'
 
+# nvcx, installed into a local prefix (as in hello/)
+PREFIX := $(CURDIR)/prefix
+PKG_CONFIG := PKG_CONFIG_PATH=$(PREFIX)/lib/pkgconfig pkg-config
 bridge:
-	cmake -S ../.. -B build
+	cmake -S ../.. -B build -DCMAKE_INSTALL_PREFIX=$(PREFIX)
 	cmake --build build -j
+	cmake --install build
+
+# Where the installed pieces are (deferred: they exist only after `bridge`)
+NVCX_PLUGIN = $(shell $(PKG_CONFIG) --variable=plugin nvcx)
+NVCX_VHDL   = $(shell $(PKG_CONFIG) --variable=vhdl nvcx)
+NVCX_TCLDIR = $(shell $(PKG_CONFIG) --variable=tcldir nvcx)
 
 # 1. NVC simulates everything
 nvc: $(NEORV32)/rtl/file_list_core.f
@@ -86,12 +84,12 @@ xsim: $(NEORV32)/rtl/file_list_core.f
 # 3. the processor in xsim, the testbench in NVC
 mixed: bridge xsim
 	rm -rf out/mixed && mkdir -p out/mixed
-	$(NVC) --work=nvcx:out/mixed/nvcx -a build/nvcx.vhd
+	$(NVC) --work=nvcx:out/mixed/nvcx -a $(NVCX_VHDL)
 	$(NVC) --map=nvcx:out/mixed/nvcx --work=work:out/mixed/work -a bench_pkg.vhd tb.vhd -e tb
-	./nvc.tcl
+	TCLLIBPATH=$(NVCX_TCLDIR) ./nvc.tcl
 	$(NVC) --map=nvcx:out/mixed/nvcx --work=work:out/mixed/work -a out/mixed/soc_shell.vhd -e tb
-	cd out/mixed && $(call TIME,$(NVC) --map=nvcx:nvcx --work=work:work -r --ieee-warnings=off --load ../../build/libnvcx.so --stop-time=1sec tb,time)
+	cd out/mixed && $(call TIME,$(NVC) --map=nvcx:nvcx --work=work:work -r --ieee-warnings=off --load $(NVCX_PLUGIN) --stop-time=1sec tb,time)
 
 clean:
-	rm -rf out build nvcx.work xsim.dir *.log *.jou *.pb
+	rm -rf out build prefix nvcx.work xsim.dir *.log *.jou *.pb
 endif

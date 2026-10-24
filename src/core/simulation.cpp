@@ -23,11 +23,17 @@ namespace {
     }
 
     // The release that elaborated the snapshot in *dir*, from its xsim.version
-    // (xelab 2025.2 and later), else "".
+    // (xelab 2025.2 and later), else "". 2025.2 writes "hjhoth" rather than
+    // its version; 2026.1 writes "2026.1".
     std::string snapshot_version(const std::string& dir) {
         std::ifstream f(dir + "/xsim.version");
         std::string v;
         f >> v;
+
+	// for some reason...
+        if (v == "hjhoth")
+            return "2025.2";
+
         return v;
     }
 

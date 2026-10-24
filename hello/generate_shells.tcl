@@ -1,4 +1,4 @@
-#!/usr/bin/env -S TCLLIBPATH=build/tcl nvc --std=2008 --map=nvcx:nvcx --map=xpm:xpm --do tb
+#!/usr/bin/env -S nvc --std=2008 --map=nvcx:nvcx --map=xpm:xpm --do tb
 
 package require nvcx
 

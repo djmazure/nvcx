@@ -56,6 +56,46 @@ conventional (synchronous) design practice. I'm not a simulator expert, so you
 are (unfortunately) going to have to convince yourself. If you do, regardless
 of your conclusions, drop me a note.
 
+## Testing
+
+Unfortunately there isn't an obvious public GitHub image containing Vivado
+builds, so testing is currently done outside the conventional GitHub CI/CD
+infrastructure.
+
+Tested on a Ubuntu image against:
+
+- Vivado 2025.1
+- Vivado 2025.2
+- Vivado 2026.1
+
+Versions older than this have a different shared-library naming style
+(`libxv_*` vs `librdi_*`) and are not supported by nvcx (although this could
+be added if anyone wants it.)
+
+## Install
+
+You need:
+
+* NVC 1.23, built with `--enable-tcl` and the patches in `contrib/` (these are
+  submitted upstream; the `Dockerfile` shows the recipe),
+* CMake 3.24 or later
+* a C++20 compiler,
+* Boost.Context, and
+* Vivado at run time, located via `XILINX_VIVADO`.
+
+Then:
+
+    $ cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local
+    $ cmake --build build -j
+    $ sudo cmake --install build
+
+The installation includes a pkg-config file, which tells your build where each
+of them went:
+
+    $ nvc --work=nvcx:nvcx -a $(pkg-config --variable=vhdl nvcx)
+    $ TCLLIBPATH=$(pkg-config --variable=tcldir nvcx) nvc ... --do script.tcl
+    $ nvc ... -r --load $(pkg-config --variable=plugin nvcx) top
+
 ## Build and test
 
 The test suite is Dockerized and is therefore fairly portable:
@@ -66,6 +106,13 @@ The test suite is Dockerized and is therefore fairly portable:
     [...eventually...]
     ..................                                               [100%]
     18 passed in 115.76s (0:01:55)
+
+(Aside: the use of Docker here also allows us to test against multiple Vivado
+versions, which are unlikely to all be happy in your host OS image.)
+
+In order to test against all suitable Vivado installations, run:
+
+    $ make test-all  # add VIVADOES="2025.1 2025.2 2026.1" to specify
 
 ## Benchmark
 
@@ -78,6 +125,22 @@ The test suite is Dockerized and is therefore fairly portable:
 The console transcript and the cycle count must be identical in order for the
 underlying simulations to be correct. Wall times are an indication of the
 relative performance of each engine.
+
+The benchmark results look something like:
+
+```
+mode    run [s]   uart0.txt
+nvc         5.47   same as nvc
+xsim       10.20   same as nvc
+mixed       8.92   same as nvc
+```
+
+These results include start-up time (which unfairly penalizes xsim if the
+normal use-case is long simulation runs.) As expected, nvc is faster than
+xsim, and given this dynamic it seems reasonable that a mixed / nvcx
+simulation is somewhere between the two (depending on the fraction of the
+design in each world, with a slight boundary-crossing penalty that nvcx
+should try to minimize.)
 
 ## Disclaimer
 

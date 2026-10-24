@@ -11,7 +11,6 @@
 # the generated VHDL shells need to be elaborated by NVC and the simulator
 # can start.
 
-package provide nvcx 1.0
 package require sha256
 package require fileutil
 package require cmdline

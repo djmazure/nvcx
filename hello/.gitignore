@@ -11,3 +11,4 @@ xsim.wdb
 *.log
 *.jou
 *.pb
+prefix/

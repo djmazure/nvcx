@@ -1,13 +1,17 @@
 # This is a wrapper for Makefile dinosaurs (...me). Integrate using CMake
 # instead.
 
-.PHONY: all configure pytest test hello bench shell format clean
+.PHONY: all configure install pytest test test-all hello bench shell format clean
 
 all: configure
 	cmake --build build -j
 
 configure build/CMakeCache.txt:
 	cmake -S . -B build
+
+# Natively, not in Docker; set the prefix with `cmake -S . -B build -DCMAKE_INSTALL_PREFIX=...`
+install: all
+	cmake --install build
 
 # The suite itself: what `make test` runs inside the container.
 pytest: all
@@ -19,7 +23,7 @@ hello:
 bench:
 	$(MAKE) -C bench/neorv32 bench
 
-test shell:
+test test-all shell:
 	$(MAKE) -C tests $@
 
 format:

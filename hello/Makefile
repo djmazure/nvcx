@@ -16,19 +16,8 @@ ifeq ($(wildcard /.dockerenv),)
 # Outside Docker: build the image and re-run this Makefile inside it
 #
 
-XILINX_ROOT := $(realpath $(XILINX_VIVADO)/../..)
-
-.PHONY: all image clean
-all image clean sim snapshot bridge:
-	docker build -t nvcx-hello -f ../Dockerfile ..
-	docker run --rm --network=host \
-		-u $(shell id -u):$(shell id -g) \
-		-v $(realpath ..):/work -w /work/hello \
-		-v $(XILINX_ROOT):$(XILINX_ROOT):ro \
-		-v $(HOME)/.Xilinx:/tmp/.Xilinx:ro -e XILINX_VIVADO -e HOME=/tmp \
-		-e PATH=$(XILINX_VIVADO)/bin:/usr/local/bin:/usr/bin:/bin \
-		nvcx-hello \
-		make $@
+DOCKER_TARGETS := all clean sim snapshot bridge
+include ../docker.mk
 
 else
 #
@@ -38,10 +27,20 @@ else
 .PHONY: all bridge snapshot sim clean
 all: sim
 
-# 1. Build nvcx
+# 1. Build and install nvcx into a local prefix. To use an nvcx that's already
+#    installed, drop `bridge` from sim's prerequisites below: pkg-config falls
+#    back to its default search path.
+PREFIX := $(CURDIR)/prefix
+PKG_CONFIG := PKG_CONFIG_PATH=$(PREFIX)/lib/pkgconfig pkg-config
 bridge:
-	cmake -S .. -B build
+	cmake -S .. -B build -DCMAKE_INSTALL_PREFIX=$(PREFIX)
 	cmake --build build -j
+	cmake --install build
+
+# Where the installed pieces are (deferred: they exist only after `bridge`)
+NVCX_PLUGIN = $(shell $(PKG_CONFIG) --variable=plugin nvcx)
+NVCX_VHDL   = $(shell $(PKG_CONFIG) --variable=vhdl nvcx)
+NVCX_TCLDIR = $(shell $(PKG_CONFIG) --variable=tcldir nvcx)
 
 # 2. Vivado
 EXPORT   := export_sim/hello_dds/xsim
@@ -59,12 +58,12 @@ NVC := nvc --std=2008 --map=nvcx:nvcx --map=xpm:xpm
 sim: bridge $(SNAPSHOT)
 	# Teach your preferred build tool how to do it better
 	rm -rf work
-	$(NVC) --work=nvcx:nvcx -a build/nvcx.vhd
+	$(NVC) --work=nvcx:nvcx -a $(NVCX_VHDL)
 	$(NVC) --work=xpm:xpm -a $(XPM)
 	$(NVC) -a tb.vhd -e tb # first pass: elaborate to identify XSI-shaped holes
-	./generate_shells.tcl # xelab (for xsim) and generate RTL wrappers (for nvc)
+	TCLLIBPATH=$(NVCX_TCLDIR) ./generate_shells.tcl # xelab (for xsim) and generate RTL wrappers (for nvc)
 	$(NVC) -a *_shell.vhd -e tb # second pass: elaborate everything
-	$(NVC) -r --load build/libnvcx.so --wave=tb.fst tb
+	$(NVC) -r --load $(NVCX_PLUGIN) --wave=tb.fst tb
 
 clean:
 	rm -rf vivado export_sim \
@@ -73,7 +72,7 @@ clean:
 		tb.fst \
 		xsim.wdb \
 		nvcx.work \
-		build \
+		build prefix \
 		.Xil \
 		xsim.dir \
 		*.log *.jou *.pb

@@ -1,0 +1,16 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=@CMAKE_INSTALL_FULL_LIBDIR@
+datadir=@CMAKE_INSTALL_FULL_DATADIR@
+
+# VHPI plugin, for `nvc --load`
+plugin=${libdir}/nvcx/libnvcx.so
+
+# bridge entity, analysed into library nvcx
+vhdl=${datadir}/nvcx/nvcx.vhd
+
+# Tcl package directory, for TCLLIBPATH
+tcldir=@NVCX_TCL_FULL_DIR@
+
+Name: nvcx
+Description: Embed AMD/Xilinx xsim inside NVC
+Version: @PROJECT_VERSION@

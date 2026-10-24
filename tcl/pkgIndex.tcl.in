@@ -1,0 +1,1 @@
+package ifneeded nvcx @PROJECT_VERSION@ "[list source [file join $dir nvcx.tcl]]; [list package provide nvcx @PROJECT_VERSION@]"

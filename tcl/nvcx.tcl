@@ -153,19 +153,31 @@ namespace eval nvcx {
         set comp ""
         catch { set comp [string tolower [vhpi::get_str CompName $h]] }
         if {$comp ne ""} {
+            # A type or mode a shell cannot express is recorded as
+            # {unsupported WHY}, and is an error only if a shell is asked
+            # for this component: a bound instance (a UNISIM primitive, say)
+            # may use whatever it likes.
             set generics {}
             foreach g [vhpi::iterate GenericDecls $h] {
-                set type [generic_type [vhpi::get_str Name [vhpi::handle BaseType $g]]]
+                if {[catch {
+                    set type [generic_type [vhpi::get_str Name [vhpi::handle BaseType $g]]]
+                    set value [vhpi::get_value $g]
+                } why]} {
+                    set type [list unsupported $why]
+                    set value ""
+                }
                 # the name as declared: a Verilog parameter is case-sensitive for -generic_top
-                lappend generics [list [vhpi::get_str Name $g] $type [vhpi::get_value $g]]
+                lappend generics [list [vhpi::get_str Name $g] $type $value]
             }
             set ports {}
             foreach p [vhpi::iterate PortDecls $h] {
                 set mode [vhpi::get Mode $p]
                 if {$mode == 1001} { set mode in } elseif {$mode == 1002} { set mode out } else {
-                    error "[vhpi::get_str FullName $h]: port [vhpi::get_str Name $p]: only in and out ports are supported"
+                    set mode [list unsupported "only in and out ports are supported"]
                 }
-                set type [port_type [vhpi::get_str Name [vhpi::handle BaseType $p]]]
+                if {[catch {port_type [vhpi::get_str Name [vhpi::handle BaseType $p]]} type]} {
+                    set type [list unsupported $type]
+                }
                 lappend ports [list [string tolower [vhpi::get_str Name $p]] $mode $type]
             }
             dict lappend found $comp [list $generics $ports [vhpi::get_str FullName $h]]
@@ -312,6 +324,23 @@ namespace eval nvcx {
             error "nvcx::write_shell $name: the design instantiates no component of that name (components: [join [dict keys $all] ", "])"
         }
         set instances [dict get $all $name]
+        foreach inst $instances {
+            lassign $inst generics ports full
+            foreach g $generics {
+                lassign $g gname gtype
+                if {[lindex $gtype 0] eq "unsupported"} {
+                    error "nvcx::write_shell $name: $full: generic $gname: [lindex $gtype 1]"
+                }
+            }
+            foreach p $ports {
+                lassign $p pname pmode ptype
+                foreach what [list $pmode $ptype] {
+                    if {[lindex $what 0] eq "unsupported"} {
+                        error "nvcx::write_shell $name: $full: port $pname: [lindex $what 1]"
+                    }
+                }
+            }
+        }
         if {$snapshot ne ""} {
             set what [list snapshot $snapshot]
         } else {

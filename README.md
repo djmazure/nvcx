@@ -114,38 +114,39 @@ In order to test against all suitable Vivado installations, run:
 
     $ make test-all  # add VIVADOES="2025.1 2025.2 2026.1" to specify
 
-## Benchmark
+## FAQ
 
-`make bench` runs NEORV32 through its bootloader's UART console three ways:
+**Q: What versions of Vivado are supported?**
+> Vivado 2025.1, 2025.2, and 2026.1 are tested via `make test-all`.
+> Older versions of Vivado named their shared libraries differently (`libxv_*`
+> vs `librdi_*`) and would take a little extra effort.
 
-- everything in NVC,
-- everything in xsim, and
-- the processor in xsim behind an nvcx shell with the testbench in NVC.
+**Q: For XPM, should I use `nvcx` or `xpm_vhdl` (`nvc --install xpm_vhdl`)?**
+> Your call. `nvcx` will be slower; `xpm_vhdl` has minor coverage gaps for
+> things like ECC/error injection.  Which strategy is better is mostly a
+> question of designer's preference: do you trust nvcx's simulator bridge, or
+> xpm_vhdl's faithful reinterpretation of xpm RTL?
 
-The console transcript and the cycle count must be identical in order for the
-underlying simulations to be correct. Wall times are an indication of the
-relative performance of each engine.
+**Q: How much slower is nvcx than NVC? than xsim?**
+> With a single seam, nvcx performs approximately as quickly as you'd expect
+> (faster than xsim alone, slower than NVC alone, with a small extra overhead
+> for the seam.) With many nvcx seams, the overhead associated with nvcx
+> increases.
+>
+> A completely arbitrary benchmark (`make bench`) shows:
+>
+> ```
+> mode    run [s]   uart0.txt
+> nvc         5.47   same as nvc
+> xsim       10.20   same as nvc
+> mixed       8.92   same as nvc
+> ```
+>
+> This includes start-up time; depending on your perspective, this may be totally
+> appropriate or may penalize xsim slightly for being slow off the marks.
 
-The benchmark results look something like:
+**Q: Is nvcx affiliated with NVC at all?**
+> No! NVC is an excellent project and I should probably have chosen another name.
 
-```
-mode    run [s]   uart0.txt
-nvc         5.47   same as nvc
-xsim       10.20   same as nvc
-mixed       8.92   same as nvc
-```
-
-These results include start-up time (which unfairly penalizes xsim if the
-normal use-case is long simulation runs.) As expected, nvc is faster than
-xsim, and given this dynamic it seems reasonable that a mixed / nvcx
-simulation is somewhere between the two (depending on the fraction of the
-design in each world, with a slight boundary-crossing penalty that nvcx
-should try to minimize.)
-
-## Disclaimer
-
-This is just a proof-of-concept. It has not been tested "in anger". Comments
-very welcome at <gsmecher@threespeedlogic.com>.
-
-* Is nvcx affiliated with NVC at all? No.
-* Is nvcx a triumph or an abomination? Yes.
+**Q: Is nvcx a triumph or an abomination?**
+> Yes.

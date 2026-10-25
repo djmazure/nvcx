@@ -81,6 +81,7 @@ namespace eval nvcx {
 
     # VHDL for the string TEXT, one literal per line joined with LF.
     proc vhdl_lines {text} {
+        if {$text eq ""} { return {""} }
         set parts {}
         foreach line [split $text "\n"] {
             lappend parts "\"[string map {\" \"\"} $line]\""

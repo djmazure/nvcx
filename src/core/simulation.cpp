@@ -30,7 +30,7 @@ namespace {
         std::string v;
         f >> v;
 
-	// for some reason...
+        // for some reason...
         if (v == "hjhoth")
             return "2025.2";
 
@@ -166,7 +166,9 @@ Simulation::Simulation(const std::string& design_so)
             ports_.push_back(std::move(p));
         }
         static std::once_flag at_exit;
-        std::call_once(at_exit, [] { atexit(close_live_at_exit); });
+        std::call_once(at_exit, [] {
+            atexit(close_live_at_exit);
+        });
     } catch (...) {
         {
             std::lock_guard<std::mutex> lock(g_live_mu);

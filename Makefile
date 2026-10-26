@@ -1,7 +1,7 @@
 # This is a wrapper for Makefile dinosaurs (...me). Integrate using CMake
 # instead.
 
-.PHONY: all configure install pytest test test-all hello bench shell format clean
+.PHONY: all configure install pytest test test-all hello bench shell format hooks clean
 
 all: configure
 	cmake --build build -j
@@ -29,6 +29,10 @@ test test-all shell:
 format:
 	clang-format-21 -i `git ls-files "*.cpp" "*.hpp"`
 	black `git ls-files "*.py"`
+
+# Check formatting before each commit (.githooks/pre-commit)
+hooks:
+	git config core.hooksPath .githooks
 
 clean:
 	rm -rf build build-docker

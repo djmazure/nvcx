@@ -244,8 +244,7 @@ void test_shared_kernel() {
     {
         // the same design twice, and a Verilog one alongside, clocked in
         // turn with different data
-        Simulation a(snap("dut")), b(snap("dut")),
-            v(snap("dut_v"));
+        Simulation a(snap("dut")), b(snap("dut")), v(snap("dut_v"));
         set_logic(v, "doom", "0");
         for (unsigned x : {1u, 0xBEEFu, 0x1234u}) {
             set_logic(a, "u_in", bits(x, 16));

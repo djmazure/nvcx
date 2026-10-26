@@ -7,7 +7,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_hello(nvc, vivado, tmp_path):
-    for name in ["CMakeLists.txt", "nvcx.pc.in", "src", "include", "vhdl", "tcl", "tests", "hello"]:
+    for name in [
+        "CMakeLists.txt",
+        "nvcx.pc.in",
+        "src",
+        "include",
+        "vhdl",
+        "tcl",
+        "tests",
+        "hello",
+    ]:
         src = ROOT / name
         if src.is_dir():
             shutil.copytree(

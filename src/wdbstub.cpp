@@ -13,6 +13,5 @@ class __attribute__((visibility("default"))) IEventTarget {
   public:
     virtual ~IEventTarget();
 };
-IEventTarget::~IEventTarget() =
-    default;
-}
+IEventTarget::~IEventTarget() = default;
+} // namespace SimBridge

@@ -1,0 +1,34 @@
+#!/bin/sh
+# Refuse a commit whose C++ or Python is not as `make format` would leave it
+# (clang-format-21, black). The staged contents are checked, not the working
+# tree, so a partly staged file is judged by what is being committed.
+#
+# Enable with `make hooks`; skip it for one commit with `git commit --no-verify`.
+
+need() {
+    command -v "$1" >/dev/null 2>&1 && return
+    echo "pre-commit: $1 is not installed (needed to check formatting)" >&2
+    exit 1
+}
+
+bad=
+for f in $(git diff --cached --name-only --diff-filter=ACMR); do
+    case $f in
+    *.cpp | *.hpp)
+        need clang-format-21
+        git show ":$f" | clang-format-21 --dry-run --Werror \
+            --assume-filename="$f" >/dev/null 2>&1 || bad="$bad $f"
+        ;;
+    *.py)
+        need black
+        git show ":$f" | black --check -q --stdin-filename "$f" - \
+            >/dev/null 2>&1 || bad="$bad $f"
+        ;;
+    esac
+done
+
+if [ -n "$bad" ]; then
+    echo "pre-commit: not formatted:$bad" >&2
+    echo "pre-commit: run \`make format\` and stage the result" >&2
+    exit 1
+fi

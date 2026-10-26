@@ -89,14 +89,14 @@ class Simulation {
     void get(const Port& p, uint8_t* buf) const;
     void put(const Port& p, const uint8_t* buf);
 
-    // VHDL report/assert messages from the kernel, as it formats them
-    // ("Failure: ...\nTime: ..."); the default sink prints them to stdout the
-    // way a standalone simulator would.
+    // Report/assert messages from the kernel, as it formats them
+    // ("Failure: ...\nTime: ..." for VHDL, "Fatal: ..." for $fatal); the
+    // default sink prints them to stdout the way a standalone simulator would.
     void set_report_sink(std::function<void(const std::string&)> sink) {
         report_sink_ = std::move(sink);
     }
-    // Severity of such a message, as the sink receives it: 0 note, 1 warning,
-    // 2 error, 3 failure.
+    // Severity of such a message, as the sink receives it: 0 note (and
+    // $info), 1 warning, 2 error, 3 failure (and $fatal).
     static int report_severity(const std::string& msg);
 
   private:

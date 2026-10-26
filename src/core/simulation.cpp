@@ -246,9 +246,9 @@ std::string Simulation::last_error() {
     return e ? e : "";
 }
 
-// The buffer holds every report of the run, newest first, each as
+// The buffer holds every report of the run, oldest first, each as
 // '@"<text>\nTime: ... Process: ...\n"': split them, drop the kernel's own
-// location trailer (the sink adds its simulator's), emit oldest first.
+// location trailer (the sink adds its simulator's), emit them in order.
 void Simulation::emit_report(const std::string& raw) {
     std::vector<std::string> msgs;
     size_t pos = 0;
@@ -270,18 +270,18 @@ void Simulation::emit_report(const std::string& raw) {
         msgs.push_back(m);
         pos = next == std::string::npos ? raw.size() : next + 1;
     }
-    for (auto it = msgs.rbegin(); it != msgs.rend(); ++it) {
+    for (const std::string& m : msgs) {
         if (report_sink_) {
-            report_sink_(*it);
+            report_sink_(m);
         } else {
-            fprintf(stdout, "%s\n", it->c_str());
+            fprintf(stdout, "%s\n", m.c_str());
             fflush(stdout);
         }
     }
 }
 
 int Simulation::report_severity(const std::string& msg) {
-    if (msg.starts_with("Failure:"))
+    if (msg.starts_with("Failure:") || msg.starts_with("Fatal:"))
         return 3;
     if (msg.starts_with("Error:"))
         return 2;

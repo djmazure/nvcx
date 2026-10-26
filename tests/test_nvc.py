@@ -28,8 +28,11 @@ class Case:
     run_args: list[str] = field(default_factory=list)
     check: object = None  # check(tmp_path, result) after a passing run
     expect_failure: list[str] | None = (
-        None  # the run must stop, with these texts in its output
+        None  # the run must stop, with these texts in its output, in this order
     )
+    expect_absent: list[str] = field(
+        default_factory=list
+    )  # texts the run's output must not have
     tcl_expect: list[str] = field(default_factory=list)  # texts nvcx.tcl must print
     before_run: object = (
         None  # before_run(tmp_path): tamper between nvcx.tcl and the run
@@ -110,6 +113,53 @@ CASES = {
         "tb_doom",
         "100ns",
         expect_failure=["** Failure:", "DOOM!"],
+        expect_absent=["FAIL"],
+    ),
+    # the core's reports and assertions at every severity arrive as NVC's, at their severity, in
+    # the order the core made them, the failure ending the run
+    "severity": Case(
+        [Core("sev", "sev")],
+        "tb_sev.vhd",
+        "tb_sev",
+        "100ns",
+        run_args=["--exit-severity=failure"],
+        expect_failure=[
+            "** Note: 1ns+1: :tb_sev:s:core:: sev note",
+            "** Warning: 1ns+1: :tb_sev:s:core:: sev warning",
+            "** Error: 1ns+1: :tb_sev:s:core:: sev error",
+            "** Failure: 1ns+1: :tb_sev:s:core:: sev failure",
+        ],
+        expect_absent=["FAIL"],
+    ),
+    # the same from Verilog: $info, $warning, $error and $fatal
+    "severity_v": Case(
+        [Core("sev", "sev_v")],
+        "tb_sev.vhd",
+        "tb_sev",
+        "100ns",
+        run_args=["--exit-severity=failure"],
+        expect_failure=[
+            "** Note: 1ns+1: :tb_sev:s:core:: sev note",
+            "** Warning: 1ns+1: :tb_sev:s:core:: sev warning",
+            "** Error: 1ns+1: :tb_sev:s:core:: sev error",
+            "** Failure: 1ns+1: :tb_sev:s:core:: sev failure",
+        ],
+        expect_absent=["FAIL"],
+    ),
+    # NVC's --exit-severity governs them: the error ends the run, and the failure after it in the
+    # same process is never reported
+    "severity_exit": Case(
+        [Core("sev", "sev")],
+        "tb_sev.vhd",
+        "tb_sev",
+        "100ns",
+        run_args=["--exit-severity=error"],
+        expect_failure=[
+            "** Note: 1ns+1: :tb_sev:s:core:: sev note",
+            "** Warning: 1ns+1: :tb_sev:s:core:: sev warning",
+            "** Error: 1ns+1: :tb_sev:s:core:: sev error",
+        ],
+        expect_absent=["sev failure", "FAIL"],
     ),
 }
 
@@ -198,8 +248,13 @@ def run_case(case, nvc, build, bridge_env, designs, tmp_path):
         if case.expect_failure:
             # NVC's own failure exit, not a crash on the way out
             assert r.returncode == 1 and "Caught signal" not in out, out
+            pos = 0
             for text in case.expect_failure:
-                assert text in out, (text, out)
+                pos = out.find(text, pos)
+                assert pos >= 0, (text, out)
+                pos += len(text)
+            for text in case.expect_absent:
+                assert text not in out, (text, out)
             return r
         assert r.returncode == 0 and "PASS" in out, out
         r.rerun = run

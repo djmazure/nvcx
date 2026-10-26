@@ -13,7 +13,7 @@ entity hier is generic (N : integer := 2; W : natural := 4);
         dout : out std_logic_vector(W-1 downto 0); ival : out integer; rval : out real; bval : out boolean);
 end;
 architecture rtl of hier is
-  type arr_t is array (0 to N-1) of std_logic_vector(W-1 downto 0);
+  type arr_t is array (0 to N) of std_logic_vector(W-1 downto 0);
   signal chain : arr_t;
   type rec_t is record a : std_logic; b : unsigned(2 downto 0); end record;
   signal rec : rec_t := ('0', "000");
@@ -21,8 +21,9 @@ architecture rtl of hier is
   signal ev_cnt : natural := 0;
 begin
   g: for i in 0 to N-1 generate
-    u: entity work.leaf generic map (G => i) port map (clk => clk, d => din when i = 0 else chain(i-1), q => chain(i));
+    u: entity work.leaf generic map (G => i) port map (clk => clk, d => chain(i), q => chain(i+1));
   end generate;
-  dout <= chain(N-1); ival <= i_s; rval <= r_s; bval <= b_s;
+  chain(0) <= din;
+  dout <= chain(N); ival <= i_s; rval <= r_s; bval <= b_s;
   process(clk) begin if rising_edge(clk) then ev_cnt <= ev_cnt + 1; rec.b <= rec.b + 1; end if; end process;
 end;

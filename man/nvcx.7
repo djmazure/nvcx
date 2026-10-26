@@ -1,0 +1,408 @@
+.Dd October 26, 2026
+.Dt NVCX 7
+.Os
+.Sh NAME
+.Nm nvcx
+.Nd simulate AMD/Xilinx xsim cores inside the NVC VHDL simulator
+.\" ------------------------------------------------------------
+.\" Synopsis
+.\" ------------------------------------------------------------
+.Sh SYNOPSIS
+.Nm nvc
+.Fl Fl work Ns = Ns Ar nvcx:nvcx
+.Fl a
+.Pa nvcx.vhd
+.Pp
+.Nm nvc
+.Fl Fl map Ns = Ns Ar nvcx:nvcx
+.Fl Fl do
+.Ar top
+.Ar script.tcl
+.Pp
+.Nm nvc
+.Fl Fl map Ns = Ns Ar nvcx:nvcx
+.Fl r
+.Fl Fl load
+.Pa libnvcx.so
+.Ar top
+.Pp
+.Bd -literal -offset indent
+package require nvcx
+nvcx::write_shell -component name -output file \e
+    (-snapshot dir | -library lib ?-elab args?)
+.Ed
+.\" ------------------------------------------------------------
+.\" Description
+.\" ------------------------------------------------------------
+.Sh DESCRIPTION
+.Nm
+embeds the AMD/Xilinx xsim simulator inside
+.Xr nvc 1 ,
+so that cores NVC cannot simulate itself (IEEE 1735 encrypted IP, XPM
+macros, and SystemVerilog beyond NVC's current support) can be part of an
+otherwise ordinary NVC simulation.
+.Pp
+Each such core is declared as a VHDL component in the design and left
+unbound.
+.Nm
+replaces it with a generated VHDL
+.Em shell :
+an entity of the same name and interface whose architecture instantiates
+the
+.Li nvcx.bridge
+entity.
+The bridge is bound, through a VHPI foreign attribute, to a plugin that
+loads xsim's simulation kernel and the core's xsim snapshot, and exchanges
+port values with NVC.
+NVC simulates the rest of the design, which is free to use VHPI, PSL,
+waveform dumping and the like as usual.
+.Pp
+.Nm
+is not a program.
+It consists of
+.Bl -bullet -compact
+.It
+the bridge entity's VHDL source,
+.Pa nvcx.vhd ,
+to be analysed into a library named
+.Li nvcx ;
+.It
+a Tcl package,
+.Li nvcx ,
+whose
+.Ic nvcx::write_shell
+command, run under
+.Nm nvc Fl Fl do ,
+writes each core's shell and elaborates its snapshot;
+.It
+a VHPI plugin,
+.Pa libnvcx.so ,
+loaded with
+.Nm nvc Fl Fl load ;
+and
+.It
+a
+.Xr pkg-config 1
+file,
+.Pa nvcx.pc ,
+which locates the other three.
+.El
+.\" ------------------------------------------------------------
+.\" Flow
+.\" ------------------------------------------------------------
+.Sh FLOW
+A simulation using
+.Nm
+elaborates the design twice: once with the cores' components unbound, so
+that
+.Nm
+can find them, and again with their shells.
+.Bl -enum
+.It
+Analyse the bridge entity into library
+.Li nvcx ,
+once:
+.Bd -literal -offset indent
+$ nvc --work=nvcx:nvcx -a $(pkg-config --variable=vhdl nvcx)
+.Ed
+.It
+Analyse and elaborate the design.
+NVC warns that the cores' components are unbound; this is expected.
+.Bd -literal -offset indent
+$ nvc --map=nvcx:nvcx -a tb.vhd -e tb
+.Ed
+.It
+Run a Tcl script that calls
+.Ic nvcx::write_shell
+for each core, against the elaborated design:
+.Bd -literal -offset indent
+$ TCLLIBPATH=$(pkg-config --variable=tcldir nvcx) \e
+      nvc --map=nvcx:nvcx --do tb shells.tcl
+.Ed
+.It
+Analyse the shells and elaborate again:
+.Bd -literal -offset indent
+$ nvc --map=nvcx:nvcx -a *_shell.vhd -e tb
+.Ed
+.It
+Run the simulation with the plugin loaded:
+.Bd -literal -offset indent
+$ nvc --map=nvcx:nvcx -r \e
+      --load $(pkg-config --variable=plugin nvcx) tb
+.Ed
+.El
+.Pp
+Steps 3 and 4 need repeating only when a core, its interface or its
+generics change.
+.\" ------------------------------------------------------------
+.\" Tcl commands
+.\" ------------------------------------------------------------
+.Sh TCL COMMANDS
+.Bl -tag -width Ds
+.It Xo
+.Ic nvcx::write_shell
+.Fl component Ar name
+.Fl output Ar file
+.Pq Fl snapshot Ar dir | Fl library Ar lib Op Fl elab Ar args
+.Xc
+Write the VHDL shell for the component
+.Ar name
+(case-insensitive, as declared in the design) to
+.Ar file ,
+and return
+.Ar file .
+The shell's generics and ports are taken from NVC's view of the
+component's declaration, so the declaration must match the core's
+interface.
+It is an error if the elaborated design instantiates no component of that
+name; the message lists the components it does instantiate.
+Exactly one of
+.Fl snapshot
+and
+.Fl library
+must be given.
+.Bl -tag -width Ds
+.It Fl snapshot Ar dir
+Use a snapshot elaborated already by
+.Ql xelab -dll ,
+for example by a script from Vivado's
+.Ic export_simulation .
+.Ar dir
+is the snapshot's directory,
+.Pa xsim.dir/ Ns Ar name .
+The core's generics were fixed when it was elaborated; the shell declares
+them with the instantiation's values as defaults, and every instance must
+leave them at those values.
+.It Fl library Ar lib
+Elaborate the snapshot
+.Ar lib . Ns Ar name
+with
+.Ic xelab
+once for each distinct set of generic values the design instantiates the
+component with, passing them as
+.Fl generic_top .
+The shell selects the matching snapshot at run time.
+Snapshots are cached between runs (see
+.Sx FILES ) ,
+so an unchanged design does not elaborate again.
+This suits precompiled libraries such as
+.Li xpm .
+.It Fl elab Ar args
+With
+.Fl library
+only: the arguments to pass to
+.Xr xelab ,
+as a Tcl list.
+The default is
+.Ql -L Ar lib .
+.El
+.El
+.\" ------------------------------------------------------------
+.\" Interfaces
+.\" ------------------------------------------------------------
+.Sh SUPPORTED INTERFACES
+Ports must have mode
+.Li in
+or
+.Li out ;
+.Li inout
+and
+.Li buffer
+ports are not supported.
+A port's type must be one of
+.Li std_ulogic ,
+.Li std_ulogic_vector ,
+.Li signed ,
+.Li unsigned ,
+.Li bit ,
+.Li bit_vector ,
+.Li integer ,
+.Li real
+or
+.Li boolean ,
+or a subtype of one of these such as
+.Li std_logic_vector .
+Array widths come from the actual signals, so the shell declares array
+ports unconstrained.
+A port of a Verilog or SystemVerilog core must be a
+.Li std_logic
+or
+.Li bit
+scalar or array; four-state values pass through.
+.Pp
+Generics must be of type
+.Li integer ,
+.Li string ,
+.Li real
+or
+.Li boolean .
+Generic names are passed to
+.Ic xelab
+as declared, since Verilog parameter names are case-sensitive.
+.Pp
+Other components the design instantiates (a bound UNISIM primitive, for
+instance) may use any types: only components named to
+.Ic nvcx::write_shell
+are checked.
+.\" ------------------------------------------------------------
+.\" Timing
+.\" ------------------------------------------------------------
+.Sh TIMING
+NVC and the xsim kernel advance in lockstep, one delta cycle at a time.
+At each delta, inputs NVC changed are written to the kernel, the kernel
+runs one delta, and the outputs that changed are deposited for NVC's next
+delta.
+Each side therefore sees the other's assignments one delta after they were
+made, as it would in a single simulator.
+.Pp
+Every NVC time at which the core runs must be a whole number of the
+kernel's time precision; elaborate the core with a finer precision if
+.Nm
+reports otherwise.
+All instances share one kernel.
+.Pp
+Reports and assertions from a core become NVC assertions of the same
+severity, prefixed with the shell's instance name, so
+.Nm nvc Fl Fl exit-severity
+governs them as it does any other.
+.\" ------------------------------------------------------------
+.\" Environment
+.\" ------------------------------------------------------------
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev XILINX_VIVADO
+The Vivado installation whose simulator kernel and
+.Ic xelab
+are used, as set by Vivado's
+.Pa settings64.sh .
+Required.
+A snapshot can only be simulated by the Vivado release that elaborated it;
+.Nm
+refuses a mismatch.
+Vivado 2023.2 or later is required.
+.It Ev NVCX_WORK
+Directory holding the snapshot cache.
+The default is
+.Pa nvcx.work
+in the current directory.
+.It Ev TCLLIBPATH
+Must include the Tcl package directory,
+.Ql pkg-config --variable=tcldir nvcx ,
+for
+.Ql package require nvcx
+to succeed, unless the package is installed in Tcl's default path.
+.El
+.\" ------------------------------------------------------------
+.\" Files
+.\" ------------------------------------------------------------
+.Sh FILES
+Installed paths are given for a prefix of
+.Pa /usr ;
+.Xr pkg-config 1
+reports the actual ones.
+.Bl -tag -width Ds
+.It Pa /usr/lib/nvcx/libnvcx.so
+The VHPI plugin
+.Pq Ql pkg-config --variable=plugin nvcx .
+Other libraries in this directory are stand-ins for parts of Vivado and
+are not loaded directly.
+.It Pa /usr/share/nvcx/nvcx.vhd
+The bridge entity
+.Pq Ql pkg-config --variable=vhdl nvcx .
+It is instantiated only by generated shells.
+.It Pa /usr/share/nvcx/tcl/
+The directory holding the
+.Li nvcx
+Tcl package
+.Pq Ql pkg-config --variable=tcldir nvcx .
+.It Pa /usr/lib/pkgconfig/nvcx.pc
+The
+.Xr pkg-config 1
+file.
+.It Pa $NVCX_WORK/snapshots/
+Snapshots elaborated by
+.Ic nvcx::write_shell Fl library ,
+one directory per core and set of generics, keyed by the library, the
+entity, the
+.Ic xelab
+arguments, the generic values and the Vivado release.
+Each holds the
+.Ic xelab
+log,
+.Pa xelab.log .
+It is safe to delete; snapshots are elaborated again as needed.
+.El
+.\" ------------------------------------------------------------
+.\" Diagnostics
+.\" ------------------------------------------------------------
+.Sh DIAGNOSTICS
+.Nm
+reports problems as NVC assertions prefixed with
+.Ql nvcx: .
+Most are failures that end the simulation.
+One is a warning: if a shell's snapshot is missing, or the design
+instantiates a core with generics no snapshot was elaborated for, the
+instance becomes a black box with undriven outputs.
+Re-run the script that wrote the shell.
+.Pp
+If the bridge entity is simulated without the plugin loaded, it fails with
+.Dq foreign binding not resolved ;
+add
+.Fl Fl load
+to the
+.Nm nvc Fl r
+command line.
+.\" ------------------------------------------------------------
+.\" Examples
+.\" ------------------------------------------------------------
+.Sh EXAMPLES
+A script, executable thanks to its first line, that writes shells for an
+encrypted IP core exported from Vivado and for an XPM macro:
+.Bd -literal -offset indent
+#!/usr/bin/env -S nvc --std=2008 --map=nvcx:nvcx --map=xpm:xpm --do tb
+
+package require nvcx
+
+nvcx::write_shell -component hello_dds \e
+    -output hello_dds_shell.vhd \e
+    -snapshot export_sim/hello_dds/xsim/xsim.dir/hello_dds
+
+nvcx::write_shell -component xpm_memory_sdpram \e
+    -output xpm_memory_sdpram_shell.vhd \e
+    -library xpm
+.Ed
+.Pp
+The
+.Pa hello
+directory of the source distribution contains the complete example.
+.\" ------------------------------------------------------------
+.\" See also
+.\" ------------------------------------------------------------
+.Sh SEE ALSO
+.Xr nvc 1 ,
+.Xr pkg-config 1
+.Pp
+.Rs
+.%T Vivado Design Suite User Guide: Logic Simulation
+.%R UG900
+.%Q AMD
+.Re
+.Pp
+.Lk https://github.com/gsmecher/nvcx
+.\" ------------------------------------------------------------
+.\" Authors
+.\" ------------------------------------------------------------
+.Sh AUTHORS
+.An Graeme Smecher Aq Mt gsmecher@threespeedlogic.com
+.\" ------------------------------------------------------------
+.\" Caveats
+.\" ------------------------------------------------------------
+.Sh CAVEATS
+.Nm
+needs NVC built with Tcl support and carrying the patches in the source
+distribution's
+.Pa contrib
+directory, until an NVC release includes them.
+.Pp
+.Nm
+is not affiliated with NVC.

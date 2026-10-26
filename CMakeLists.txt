@@ -90,3 +90,4 @@ install(TARGETS nvcx_plugin wdbstub wdbstub_rdi kernelstub LIBRARY DESTINATION $
 install(FILES vhdl/nvcx.vhd DESTINATION ${CMAKE_INSTALL_DATADIR}/nvcx)
 install(FILES ${NVCX_TCL} DESTINATION ${NVCX_TCL_DIR}/nvcx${PROJECT_VERSION})
 install(FILES ${CMAKE_BINARY_DIR}/generated/nvcx.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+install(FILES man/nvcx.7 DESTINATION ${CMAKE_INSTALL_MANDIR}/man7)

@@ -70,6 +70,23 @@ directory through XSI, and nvcx refuses them.
 
 ## Install
 
+### From packages
+
+Each [release](https://github.com/gsmecher/nvcx/releases) carries packages for
+Debian and Ubuntu. The NVC package replaces NVC's own package of 1.23, which
+contains a few patches not yet upstreamed.  For Ubuntu 24.04:
+
+    $ R=https://github.com/gsmecher/nvcx/releases/download/v0.2.0
+    $ wget $R/nvc_1.23.0-1+nvcx1_amd64_ubuntu-24.04.deb \
+           $R/nvcx_0.2.0-1_amd64_ubuntu-24.04.deb
+    $ sudo apt install ./nvc_1.23.0-1+nvcx1_amd64_ubuntu-24.04.deb \
+                       ./nvcx_0.2.0-1_amd64_ubuntu-24.04.deb
+
+Substitute `debian-13` or `ubuntu-26.04` as appropriate. Vivado is needed at
+run time, located via `XILINX_VIVADO`, and is not packaged.
+
+### From source
+
 You need:
 
 * NVC 1.23, built with `--enable-tcl` and the patches in `contrib/` (these are
@@ -87,8 +104,11 @@ Then:
     $ cmake --build build -j
     $ sudo cmake --install build
 
-The installation includes a pkg-config file, which tells your build where each
-of them went:
+### Using it
+
+Either way, the installation includes a VHPI plugin, the bridge entity's VHDL,
+a Tcl package, and a pkg-config file, which tells your build where each of
+them went:
 
     $ nvc --work=nvcx:nvcx -a $(pkg-config --variable=vhdl nvcx)
     $ TCLLIBPATH=$(pkg-config --variable=tcldir nvcx) nvc ... --do script.tcl

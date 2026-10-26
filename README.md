@@ -122,10 +122,9 @@ In order to test against all suitable Vivado installations, run:
 > RTL?
 
 **Q: How much slower is nvcx than NVC? than xsim?**
-> With a single seam, nvcx performs approximately as quickly as you'd expect
-> (faster than xsim alone, slower than NVC alone, with a small extra overhead
-> for the seam.) With many nvcx seams, the overhead associated with nvcx
-> increases.
+> nvcx doesn't add much overhead. The xsim portion of the design runs at xsim
+> speeds (slowish); the NVC portion runs at NVC speeds (fast-ish). The result
+> is somewhere between the two, weighted by the amount of logic in each domain.
 >
 > A completely arbitrary benchmark (`make bench`) shows:
 >

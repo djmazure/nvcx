@@ -12,6 +12,7 @@ def test_hello(nvc, vivado, tmp_path):
         "nvcx.pc.in",
         "src",
         "include",
+        "man",
         "vhdl",
         "tcl",
         "tests",

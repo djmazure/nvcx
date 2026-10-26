@@ -1,0 +1,48 @@
+Install a pkg-config file for the VHPI headers
+
+nvc.pc gives the include directory of vhpi_user.h and vhpi_ext_nvc.h, and
+NVC's version, so that VHPI plugins (nvcx among them) can find the headers
+NVC installed with pkg-config. There is nothing to link: a plugin takes the
+vhpi_* functions from the nvc process that loads it. configure.ac and
+Makemodule.am change, so the build needs autoreconf after patching. Against
+nvc 1.23.0.
+
+diff --git a/configure.ac b/configure.ac
+index 4bbef43f5..a4f492333 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -493,5 +493,5 @@ ARFLAGS="${ARFLAGS:-cr}"
+ AC_SUBST(ARFLAGS)
+ 
+ AC_CONFIG_HEADERS([config.h])
+-AC_CONFIG_FILES([Makefile])
++AC_CONFIG_FILES([Makefile src/vhpi/nvc.pc])
+ AC_OUTPUT
+diff --git a/src/vhpi/Makemodule.am b/src/vhpi/Makemodule.am
+index c1e09b8bc..bd0955e2f 100644
+--- a/src/vhpi/Makemodule.am
++++ b/src/vhpi/Makemodule.am
+@@ -8,3 +8,8 @@ lib_libnvc_a_SOURCES += \
+ 	src/vhpi/vhpi-priv.h
+ 
+ include_HEADERS += src/vhpi/vhpi_user.h src/vhpi/vhpi_ext_nvc.h
++
++# Plugins find the headers with pkg-config; they take the vhpi_* functions
++# from the nvc process that loads them, so there is nothing to link
++pkgconfigdir = $(libdir)/pkgconfig
++pkgconfig_DATA = src/vhpi/nvc.pc
+diff --git a/src/vhpi/nvc.pc.in b/src/vhpi/nvc.pc.in
+new file mode 100644
+index 000000000..d2d778d3c
+--- /dev/null
++++ b/src/vhpi/nvc.pc.in
+@@ -0,0 +1,9 @@
++prefix=@prefix@
++exec_prefix=@exec_prefix@
++includedir=@includedir@
++
++Name: nvc
++Description: VHPI headers for plugins of the NVC VHDL simulator
++URL: https://www.nickg.me.uk/nvc/
++Version: @PACKAGE_VERSION@
++Cflags: -I${includedir}

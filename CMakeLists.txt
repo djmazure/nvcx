@@ -24,9 +24,12 @@ add_library(nvcx_core STATIC src/core/kernel.cpp src/core/vivado.cpp src/core/si
 target_link_libraries(nvcx_core PUBLIC ${CMAKE_DL_LIBS} Boost::context PRIVATE nvcx_warnings)
 target_include_directories(nvcx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# VHPI plugin for NVC
+# VHPI plugin for NVC, built against the vhpi_user.h NVC installs, as its
+# pkg-config file says (nvc.pc: NVC 1.24, or contrib/0005 for 1.23)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(NVC REQUIRED IMPORTED_TARGET nvc)
 add_library(nvcx_plugin SHARED src/bridge/bridge.cpp)
-target_link_libraries(nvcx_plugin PRIVATE nvcx_core nvcx_warnings)
+target_link_libraries(nvcx_plugin PRIVATE nvcx_core nvcx_warnings PkgConfig::NVC)
 target_link_options(nvcx_plugin PRIVATE "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/bridge/exports.map" -Wl,-Bsymbolic)
 set_target_properties(nvcx_plugin PROPERTIES OUTPUT_NAME nvcx LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/bridge/exports.map)
 

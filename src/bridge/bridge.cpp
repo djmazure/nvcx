@@ -27,7 +27,7 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include "vhpi_user.h"
+#include <vhpi_user.h>
 #include "nvcx/simulation.hpp"
 #include "nvcx/vivado.hpp"
 
@@ -97,7 +97,7 @@ std::string get_string(vhpiHandleT param) {
         fail("cannot read string parameter");
     std::string buf((size_t)need, '\0');
     v.bufSize = (size_t)need;
-    v.value.str = buf.data();
+    v.value.str = reinterpret_cast<vhpiCharT*>(buf.data());
     if (vhpi_get_value(param, &v) != 0)
         fail("cannot read string parameter");
     buf.resize(strnlen(buf.data(), buf.size()));
@@ -367,7 +367,7 @@ bool step(Instance& in) {
     }
     vhpiTimeT now{};
     vhpi_get_time(&now, nullptr);
-    uint64_t now_fs = ((uint64_t)now.high << 32) | now.low;
+    uint64_t now_fs = ((uint64_t)(uint32_t)now.high << 32) | now.low;
     if (now_fs % in.fs_per_tick != 0) {
         fail(std::format("{}: NVC time {} fs is not a multiple of the "
                          "kernel's {} fs tick; elaborate the core with a finer "
@@ -444,7 +444,7 @@ bool step(Instance& in) {
     if (d.next_event_time(next) && !d.finished()) {
         uint64_t delay_fs =
             (next > d.time() ? next - d.time() : 1) * in.fs_per_tick;
-        vhpiTimeT t{.high = (uint32_t)(delay_fs >> 32),
+        vhpiTimeT t{.high = (int32_t)(delay_fs >> 32),
                     .low = (uint32_t)delay_fs};
         vhpiCbDataT cb{.reason = vhpiCbAfterDelay,
                        .cb_rtn = on_timeout,

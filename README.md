@@ -73,8 +73,10 @@ directory through XSI, and nvcx refuses them.
 You need:
 
 * NVC 1.23, built with `--enable-tcl` and the patches in `contrib/` (these are
-  submitted upstream; the `Dockerfile` shows the recipe),
-* CMake 3.24 or later
+  submitted upstream; the `Dockerfile` shows the recipe). nvcx is built
+  against NVC's VHPI header, found through the pkg-config file NVC installs
+  (`nvc.pc`, from `0005-nvc-pkg-config.patch`),
+* CMake 3.24 or later, and pkg-config,
 * a C++20 compiler,
 * Boost.Context, and
 * Vivado at run time, located via `XILINX_VIVADO`.

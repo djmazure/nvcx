@@ -3,6 +3,8 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+		autoconf \
+		automake \
 		build-essential \
 		ca-certificates \
 		cmake \
@@ -34,7 +36,8 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 RUN ln -s libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5
 RUN ln -s libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
 
-# Build NVC with tcl enabled and our patches applied
+# Build NVC with tcl enabled and our patches applied (some change the build
+# system, hence autoreconf)
 ARG NVC_VERSION=1.23.0
 RUN wget -q https://github.com/nickg/nvc/releases/download/r${NVC_VERSION}/nvc-${NVC_VERSION}.tar.gz -O /tmp/nvc.tar.gz && \
 	mkdir -p /tmp/nvc && \
@@ -44,6 +47,7 @@ RUN cd /tmp/nvc && \
 	for p in /tmp/patches/*.patch; do \
 		patch -p1 < $p || exit 1; \
 	done && \
+	autoreconf -fi && \
 	mkdir build && \
 	cd build && \
 	../configure --prefix=/usr/local \

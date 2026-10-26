@@ -1,0 +1,102 @@
+name: Build release packages
+
+# Debian and Ubuntu packages of nvcx (debian/), and of the NVC it needs:
+# until an NVC release carries contrib/*.patch, NVC_TAG with them applied,
+# built with NVC's own packaging as version NVC_DEB_VERSION. That sorts above
+# NVC's own package of the release, which lacks the patches, and below its
+# next, which replaces it in an ordinary upgrade. Bump the +nvcxN suffix when
+# the patches change. Tags attach all of them to their GitHub release.
+#
+# The releases are those NVC packages for, less Debian 12 and Ubuntu 22.04,
+# which lack C++20's <format> (GCC 13), and Ubuntu 22.04 also CMake 3.24.
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+env:
+  NVC_TAG: r1.23.0  # as the Dockerfile's NVC_VERSION
+  NVC_DEB_VERSION: 1.23.0-1+nvcx1
+
+jobs:
+  pkg:
+    name: Package for ${{ matrix.distro }} ${{ matrix.version }}
+    strategy:
+      matrix:
+        include:
+          - { distro: debian, version: '13' }
+          - { distro: ubuntu, version: '24.04' }
+          - { distro: ubuntu, version: '26.04' }
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.distro }}:${{ matrix.version }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      SUFFIX: amd64_${{ matrix.distro }}-${{ matrix.version }}
+    steps:
+      - name: Install packaging tools
+        # git before checkout, so that the checkouts are repositories
+        run: |
+          apt-get -y update
+          apt-get -y install --no-install-recommends git ca-certificates \
+            dpkg-dev patch
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          path: nvcx
+      - uses: actions/checkout@v6
+        with:
+          repository: nickg/nvc
+          ref: ${{ env.NVC_TAG }}
+          fetch-depth: 1
+          path: nvc
+      - name: Build NVC package
+        working-directory: nvc
+        run: |
+          for p in ../nvcx/contrib/*.patch; do patch -p1 < $p; done
+          ln -s contrib/debian debian
+          { printf 'nvc (%s) UNRELEASED; urgency=medium\n\n' $NVC_DEB_VERSION
+            printf '  * NVC %s with the patches nvcx needs (nvcx contrib/*.patch).\n\n' $NVC_TAG
+            printf ' -- Graeme Smecher <gsmecher@t0.technology>  %s\n\n' "$(date -R)"
+            cat debian/changelog; } > changelog.new
+          mv changelog.new debian/changelog
+          apt-get -y build-dep ./
+          dpkg-buildpackage -uc -us -b
+          deb=nvc_${NVC_DEB_VERSION#*:}_amd64.deb
+          apt-get -y install ../$deb
+          mv ../$deb ../nvc_${NVC_DEB_VERSION}_$SUFFIX.deb
+      - name: Build nvcx package
+        working-directory: nvcx
+        run: |
+          vers=$(sed -n 's/^project(nvcx VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          sed -i "s/nvcx (.*)/nvcx ($vers-1)/" debian/changelog
+          apt-get -y build-dep ./
+          dpkg-buildpackage -uc -us -b
+          mv ../nvcx_$vers-1_amd64.deb ../nvcx_$vers-1_$SUFFIX.deb
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.distro }}-${{ matrix.version }} packages
+          path: '*_${{ env.SUFFIX }}.deb'
+
+  release:
+    name: Attach packages to the release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: pkg
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" --notes "Debian and Ubuntu packages: see the assets."
+          gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber *.deb

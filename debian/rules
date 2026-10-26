@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+%:
+	dh $@ --buildsystem=cmake
+
+# librdi_simulator_kernel.so, the stand-in for Vivado's kernel before 2025.1,
+# NEEDs a placeholder that nvcx replaces with Vivado's kernel at run time
+# (src/kernelstub.cpp): there is nothing for dh_shlibdeps to find
+override_dh_shlibdeps:
+	dh_shlibdeps -Xlibrdi_simulator_kernel.so
+
+# the tests need Vivado
+override_dh_auto_test:

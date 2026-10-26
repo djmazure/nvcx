@@ -39,6 +39,9 @@ add_library(wdbstub SHARED src/wdbstub.cpp)
 set_target_properties(wdbstub PROPERTIES OUTPUT_NAME xv_simbridge_kernel)
 add_library(wdbstub_rdi SHARED src/wdbstub.cpp)
 set_target_properties(wdbstub_rdi PROPERTIES OUTPUT_NAME rdi_simbridge_kernel)
+# they use nothing of libc's, but a library should still name it (lintian)
+target_link_options(wdbstub PRIVATE -Wl,--no-as-needed)
+target_link_options(wdbstub_rdi PRIVATE -Wl,--no-as-needed)
 
 # Before 2025.1 the kernel has no soname. This stub carries its name, and
 # NEEDs a placeholder that load_closure() overwrites with the kernel's path;

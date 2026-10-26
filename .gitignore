@@ -17,3 +17,12 @@ bench/neorv32/neorv32-*/
 bench/neorv32/out/
 bench/neorv32/prefix/
 bench/neorv32/uart0.txt
+# dpkg-buildpackage in the tree
+obj-*/
+debian/.debhelper/
+debian/nvcx/
+debian/nvcx-dbgsym/
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+debian/debhelper-build-stamp

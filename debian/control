@@ -1,0 +1,24 @@
+Source: nvcx
+Maintainer: Graeme Smecher <gsmecher@t0.technology>
+Section: electronics
+Priority: optional
+Standards-Version: 4.7.0
+Build-Depends: debhelper-compat (= 13), cmake (>= 3.24), libboost-context-dev,
+ nvc (>= 1.23.0-1+nvcx1), pkgconf
+Rules-Requires-Root: no
+Homepage: https://github.com/gsmecher/nvcx
+
+Package: nvcx
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, nvc (>= 1.23.0-1+nvcx1)
+Description: AMD/Xilinx xsim cores inside the NVC VHDL simulator
+ nvcx embeds AMD/Xilinx's xsim simulator inside NVC, so that encrypted IP,
+ XPM macros and SystemVerilog with generics can be simulated within an
+ otherwise open-source NVC simulation.
+ .
+ The package provides a VHPI plugin for NVC (nvc --load), the bridge
+ entity, a Tcl package for generating each core's shell (nvc --do), and a
+ pkg-config file locating them.
+ .
+ Vivado 2023.2 or later is needed at run time, located by XILINX_VIVADO;
+ it is not packaged.

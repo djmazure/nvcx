@@ -1,9 +1,10 @@
 # nvcx
 
-Embed AMD/Xilinx xsim inside [NVC](https://www.nickg.me.uk/nvc/). This is
-primarily intended to allow encrypted IP and SystemVerilog with generics to be
-simulated in an NVC "world", removing a major feature gap in open-source RTL
-simulation.
+Embed AMD/Xilinx xsim inside [NVC](https://www.nickg.me.uk/nvc/), a fast,
+modern, open-source VHDL simulator with improving support for SystemVerilog. By
+doing this, encrypted IP and SystemVerilog NVC doesn't yet support can be
+simulated reliably in an NVC "world", removing a major feature gap in
+open-source RTL simulation.
 
 Cores delegated to xsim become a VHDL shell and a VHPI back-end containing
 xsim's simulation model. Because NVC simulates most of the design, non-xsim

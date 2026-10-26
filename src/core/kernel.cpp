@@ -7,58 +7,19 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
-#include <map>
-#include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <string_view>
 
 namespace nvcx {
 
-static std::string canonical(const std::string& p) {
-    char* rp = realpath(p.c_str(), nullptr);
-    if (!rp)
-        return p;
-    std::string s(rp);
-    free(rp);
-    return s;
-}
-
-Kernel& Kernel::get(const std::string& path) {
-    static std::map<std::string, std::unique_ptr<Kernel>> kernels;
-    static std::mutex mu;
-    std::lock_guard<std::mutex> lock(mu);
-    auto key = canonical(path);
-    auto it = kernels.find(key);
-    if (it == kernels.end()) {
-        // The loader binds a design's NEEDED entry by soname to the first
-        // object loaded under that name, so a second kernel file with the
-        // same soname would silently split a design between two kernels.
-        // Per-instance copies must therefore carry unique names within a
-        // process.
-        auto base = [](const std::string& p) {
-            auto s = p.rfind('/');
-            return s == std::string::npos ? p : p.substr(s + 1);
-        };
-        for (auto& [k, v] : kernels)
-            if (base(k) == base(key))
-                throw std::runtime_error(
-                    std::format("a kernel named {} is already loaded from {}; "
-                                "per-instance kernel copies need distinct "
-                                "names (tags) within one process",
-                                base(key),
-                                k));
-        it = kernels.emplace(key, std::unique_ptr<Kernel>(new Kernel(key)))
-                 .first;
-    }
-    return *it->second;
+Kernel& Kernel::get() {
+    static Kernel* kernel = new Kernel(load_closure().kernel.string());
+    return *kernel;
 }
 
 Kernel::Kernel(const std::string& path) : path_(path) {
     // The kernel's libraries must already be in the process, since there is
-    // no rpath: the loader then matches its NEEDED entries by soname. The
-    // same holds for a per-instance copy, whose renamed bridge stub the
-    // instance maker preloads.
+    // no rpath: the loader then matches its NEEDED entries by soname.
     load_closure();
     dlerror();
     handle_ = dlopen(path.c_str(), RTLD_LAZY | RTLD_LOCAL | RTLD_DEEPBIND);
@@ -113,6 +74,11 @@ void Kernel::resolve_all() {
             host_isPortVHDL,
             "_ZN5ISIMK7XSIHost21isPortValueFormatVHDLEi",
             "ISIMK::XSIHost::isPortValueFormatVHDL(int)");
+
+    resolve(h,
+            host_setGlobals,
+            "_ZN5ISIMK4Host10setGlobalsEb",
+            "ISIMK::Host::setGlobals(bool)");
 
     // ISIMK::GlobalDesignProperties
     resolve(h, globalDesignProperties, "_ZN5ISIMK22GlobalDesignPropertiesE");

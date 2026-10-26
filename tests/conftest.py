@@ -59,14 +59,6 @@ def nvc():
 
 
 @pytest.fixture(scope="session")
-def kernel(vivado):
-    """Vivado's simulator kernel, used in place (its closure is loaded from the installation)."""
-    return next(
-        iter(sorted((vivado / "lib" / "lnx64.o").glob("lib*_simulator_kernel.so")))
-    )
-
-
-@pytest.fixture(scope="session")
 def bridge_env(vivado):
     """Environment for the CLI and the plugin: XILINX_VIVADO is all they need."""
     return dict(os.environ)

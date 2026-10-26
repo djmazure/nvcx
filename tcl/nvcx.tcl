@@ -19,7 +19,7 @@ namespace eval nvcx {
     # Component instances, collected on first use
     variable found {}
 
-    # Snapshot cache, and the plugin's per-instance kernel copies
+    # Snapshot cache
     proc workdir {} {
         if {[info exists ::env(NVCX_WORK)] && $::env(NVCX_WORK) ne ""} {
             return $::env(NVCX_WORK)

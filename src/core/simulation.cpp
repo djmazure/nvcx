@@ -10,7 +10,7 @@
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
-#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace nvcx {
@@ -37,8 +37,8 @@ namespace {
         return v;
     }
 
-    // The kernel keeps its state in process-wide globals
-    std::unordered_map<Kernel*, Simulation*> g_live;
+    // The open designs, closed at exit if their owners have not
+    std::unordered_set<Simulation*> g_live;
     std::mutex g_live_mu;
 
     // xsi_open is serialized across instances
@@ -59,14 +59,13 @@ namespace {
 
     constexpr size_t STACK_SIZE = 8 << 20; // the kernel's fiber
 
-    // Registered with atexit after each Simulation has loaded its libraries,
-    // so it runs before any of their static destructors
+    // Registered with atexit once the first Simulation has loaded its
+    // libraries, so it runs before any of their static destructors
     void close_live_at_exit() {
         std::vector<Simulation*> live;
         {
             std::lock_guard<std::mutex> lock(g_live_mu);
-            for (auto& [k, sim] : g_live)
-                live.push_back(sim);
+            live.assign(g_live.begin(), g_live.end());
         }
         for (Simulation* sim : live)
             sim->close();
@@ -74,10 +73,9 @@ namespace {
 
 } // namespace
 
-Simulation::Simulation(const std::string& design_so,
-                       const std::string& kernel_so)
+Simulation::Simulation(const std::string& design_so)
     : design_dir_(dirname_of(design_so)) {
-    kernel_ = &Kernel::get(kernel_so);
+    kernel_ = &Kernel::get();
     kernel_->hook_active_events(on_active_events);
     // The kernel's fiber: each start() hands it the ticks to run and resumes
     // it; it hands back when the run yields or returns.
@@ -110,15 +108,8 @@ Simulation::Simulation(const std::string& design_so,
                         kernel_->path(),
                         elaborated_by));
     {
-        // one live design per kernel library: check and claim atomically
         std::lock_guard<std::mutex> lock(g_live_mu);
-        if (g_live.count(kernel_))
-            throw std::runtime_error(
-                std::format("a design is already open on {} (the kernel holds "
-                            "global state; close it first or use a "
-                            "per-instance kernel copy)",
-                            kernel_->path()));
-        g_live[kernel_] = this;
+        g_live.insert(this);
     }
     std::lock_guard<std::mutex> open_lock(g_open_mu);
     try {
@@ -142,6 +133,7 @@ Simulation::Simulation(const std::string& design_so,
         try {
             Current current(this);
             handle_ = xsi_open(&setup_);
+            kernel_->current = nullptr; // whatever xsi_open left there
         } catch (...) {
             throw std::runtime_error(std::format(
                 "xsi_open threw (is {} the xsim.dir of this design?)",
@@ -173,14 +165,17 @@ Simulation::Simulation(const std::string& design_so,
             p.vhdl = kernel_->host_isPortVHDL(handle_, i);
             ports_.push_back(std::move(p));
         }
-        atexit(close_live_at_exit);
+        static std::once_flag at_exit;
+        std::call_once(at_exit, [] { atexit(close_live_at_exit); });
     } catch (...) {
         {
             std::lock_guard<std::mutex> lock(g_live_mu);
-            g_live.erase(kernel_);
+            g_live.erase(this);
         }
-        if (handle_)
+        if (handle_) {
             kernel_->xsi_close(handle_);
+            kernel_->current = nullptr;
+        }
         if (design_handle_)
             dlclose(design_handle_);
         throw;
@@ -190,14 +185,16 @@ Simulation::Simulation(const std::string& design_so,
 void Simulation::close() {
     {
         std::lock_guard<std::mutex> lock(g_live_mu);
-        g_live.erase(kernel_);
+        g_live.erase(this);
     }
     // the kernel cannot be closed in the middle of a time step
     while (suspended_)
         resume();
     if (handle_) {
         Current current(this);
+        make_current();
         kernel_->xsi_close(handle_);
+        kernel_->current = nullptr;
     }
     handle_ = nullptr;
 }
@@ -215,13 +212,27 @@ const Simulation::Port* Simulation::port(const std::string& name) const {
     return nullptr;
 }
 
+// The xsi_* calls on this design set its globals too; the ones that do not
+// (xsi_get_time), the kernel's globals read directly (status_kind,
+// next_event_time), and a run resumed in the middle of a time step rely on
+// this. Whatever another design did in between, its calls were preceded by
+// its own make_current(), so *current* is always right when set.
+void Simulation::make_current() const {
+    if (kernel_->current != handle_) {
+        kernel_->host_setGlobals(handle_, true);
+        kernel_->current = handle_;
+    }
+}
+
 void Simulation::get(const Port& p, uint8_t* buf) const {
+    make_current();
     // XSI writes only the significant bits of each Verilog word
     std::memset(buf, 0, p.raw_size());
     kernel_->xsi_get_value(handle_, p.index, buf);
 }
 
 void Simulation::put(const Port& p, const uint8_t* buf) {
+    make_current();
     kernel_->xsi_put_value(handle_, p.index, const_cast<uint8_t*>(buf));
 }
 
@@ -305,6 +316,7 @@ Simulation::RunResult Simulation::start(uint64_t ticks) {
 
 Simulation::RunResult Simulation::resume() {
     Current current(this);
+    make_current();
     run_ = std::move(run_).resume();
     if (suspended_)
         return {RunStatus::Yielded, ""};

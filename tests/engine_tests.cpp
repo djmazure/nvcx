@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <functional>
@@ -9,7 +10,6 @@
 #include <string>
 #include <vector>
 #include "nvcx/simulation.hpp"
-#include "nvcx/vivado.hpp"
 
 using namespace nvcx;
 namespace fs = std::filesystem;
@@ -23,7 +23,6 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::string g_kernel;
 fs::path g_designs;
 std::string snap(const std::string& s) {
     return (g_designs / "xsim.dir" / s / "xsimk.so").string();
@@ -72,7 +71,7 @@ std::string bits(unsigned v, int n) {
 
 void test_ports() {
     // XSI's port table: names, directions, and sizes in bytes for VHDL
-    Simulation d(snap("hier"), g_kernel);
+    Simulation d(snap("hier"));
     CHECK(d.precision() == -12);
     CHECK(d.ports().size() == 6);
     CHECK(port(d, "clk").dir == Direction::In && port(d, "clk").size == 1);
@@ -91,7 +90,7 @@ void test_ports() {
 }
 
 void test_clocked_run() {
-    Simulation d(snap("dut"), g_kernel);
+    Simulation d(snap("dut"));
     for (unsigned v : {0u, 1u, 0xBEEFu, 0xFFFFu}) {
         set_logic(d, "u_in", bits(v, 16));
         set_logic(d, "clk", "1");
@@ -105,7 +104,7 @@ void test_clocked_run() {
 
 void test_sequential_designs() {
     for (const char* s : {"hier", "dut", "hier"}) {
-        Simulation d(snap(s), g_kernel);
+        Simulation d(snap(s));
         CHECK(d.time() == 0);
         CHECK(d.run(1000).status == Simulation::RunStatus::Completed);
     }
@@ -113,14 +112,14 @@ void test_sequential_designs() {
 
 void test_next_event_time() {
     {
-        Simulation d(snap("exp"), g_kernel);
+        Simulation d(snap("exp"));
         uint64_t t;
         CHECK(d.next_event_time(t) && t == 5000);
         d.run(7000);
         CHECK(d.next_event_time(t) && t == 10000);
     }
     {
-        Simulation d(snap("dut"), g_kernel);
+        Simulation d(snap("dut"));
         uint64_t t;
         CHECK(!d.next_event_time(t));
         set_logic(d, "clk", "1");
@@ -130,7 +129,7 @@ void test_next_event_time() {
 }
 
 void test_verilog_values() {
-    Simulation d(snap("dut_v"), g_kernel);
+    Simulation d(snap("dut_v"));
     for (const Simulation::Port& p : d.ports())
         CHECK(!p.vhdl); // sizes in bits
     CHECK(port(d, "u_in").size == 16 && port(d, "clk").size == 1);
@@ -153,7 +152,7 @@ void test_run_zero_applies_deposits() {
     // process the resulting events (a clock edge among them) without time
     // advancing, for VHDL and Verilog alike.
     for (const char* which : {"dut", "dut_v"}) {
-        Simulation d(snap(which), g_kernel);
+        Simulation d(snap(which));
         set_logic(d, "doom", "0");
         set_logic(d, "u_in", bits(0x1234, 16));
         set_logic(d, "clk", "1");
@@ -173,38 +172,11 @@ void test_run_zero_applies_deposits() {
     }
 }
 
-void test_verilog_on_instance_copy() {
-    // A Verilog design on a per-instance kernel copy (what the bridge always
-    // uses).
-    fs::path work = fs::temp_directory_path() /
-                    ("nvcx-tests-vlog-" + std::to_string(getpid()));
-    Kernel::get(g_kernel);
-    InstancePaths p = make_instance(work, instance_tag(0), snap("dut_v"));
-    {
-        Simulation d(p.design.string(), p.kernel.string());
-        // the copies are deleted as soon as the design is open; it keeps
-        // working
-        discard_instance(p);
-        CHECK(!fs::exists(p.root));
-        CHECK(logic(d, "u_out") == std::string(16, 'X'));
-        set_logic(d, "doom", "0");
-        set_logic(d, "u_in", bits(0x0007, 16));
-        d.run(1000);
-        set_logic(d, "clk", "1");
-        d.run(0);
-        if (logic(d, "u_out") != bits(0x0007, 16) ||
-            logic(d, "u_inc") != bits(0x0008, 16)) {
-            throw std::runtime_error(std::format(
-                "u_out={} u_inc={}", logic(d, "u_out"), logic(d, "u_inc")));
-        }
-    }
-}
-
 void test_delta_steps() {
     // The kernel pauses after each delta's signal updates: clkgen's own
     // clock edge and the counter registered on it arrive in separate pauses,
     // clock first.
-    Simulation d(snap("clkgen"), g_kernel);
+    Simulation d(snap("clkgen"));
     CHECK(d.run(0).status == Simulation::RunStatus::Completed);
     std::vector<std::pair<std::string, std::string>> seen; // clk_out, cnt_out
     Simulation::RunResult r = d.start(5000);
@@ -239,7 +211,7 @@ void test_delta_steps() {
 void test_version_mismatch_refused() {
     // a snapshot's xsim.version must match the kernel's release; the kernel
     // itself does not check (and fails obscurely)
-    const std::string kernel_version = Kernel::get(g_kernel).version;
+    const std::string kernel_version = Kernel::get().version;
     if (kernel_version.empty()) {
         fprintf(stderr, "  (kernel has no version string; nothing to check)\n");
         return;
@@ -257,7 +229,7 @@ void test_version_mismatch_refused() {
         std::ofstream(dir / "xsim.version") << "1999.1\n";
     }
     try {
-        Simulation d((dir / "xsimk.so").string(), g_kernel);
+        Simulation d((dir / "xsimk.so").string());
         throw std::runtime_error("a snapshot from another release opened");
     } catch (const std::runtime_error& e) {
         std::string what = e.what();
@@ -267,14 +239,63 @@ void test_version_mismatch_refused() {
     fs::remove_all(work);
 }
 
-void test_second_live_design_refused() {
-    // one live design per kernel library: the kernel holds global state
-    Simulation a(snap("dut"), g_kernel);
-    try {
-        Simulation b(snap("hier"), g_kernel);
-        throw std::runtime_error("a second design opened on the same kernel");
-    } catch (const std::runtime_error& e) {
-        CHECK(std::string(e.what()).find("already open") != std::string::npos);
+void test_shared_kernel() {
+    // Any number of designs live on one kernel, each keeping its own state
+    {
+        // the same design twice, and a Verilog one alongside, clocked in
+        // turn with different data
+        Simulation a(snap("dut")), b(snap("dut")),
+            v(snap("dut_v"));
+        set_logic(v, "doom", "0");
+        for (unsigned x : {1u, 0xBEEFu, 0x1234u}) {
+            set_logic(a, "u_in", bits(x, 16));
+            set_logic(b, "u_in", bits(~x & 0xFFFF, 16));
+            set_logic(v, "u_in", bits(x ^ 0x5A5A, 16));
+            for (Simulation* d : {&a, &b, &v}) {
+                set_logic(*d, "clk", "1");
+                d->run(5000);
+            }
+            for (Simulation* d : {&v, &b, &a}) {
+                set_logic(*d, "clk", "0");
+                d->run(5000);
+            }
+            CHECK(logic(a, "u_out") == bits(x, 16));
+            CHECK(logic(b, "u_out") == bits(~x & 0xFFFF, 16));
+            CHECK(logic(v, "u_out") == bits(x ^ 0x5A5A, 16));
+            CHECK(logic(a, "u_inc") == bits((x + 1) & 0xFFFF, 16));
+        }
+        CHECK(a.time() == 30000 && b.time() == 30000 && v.time() == 30000);
+    }
+    {
+        // two runs paused in the middle of their time steps, resumed in
+        // alternation (as the bridge does): each counts its own clock, the
+        // same as a design run alone
+        Simulation a(snap("clkgen")), b(snap("clkgen"));
+        a.run(0);
+        b.run(0);
+        a.run(10000);
+        Simulation::RunResult ra = a.start(20000), rb = b.start(20000);
+        while (ra.status == Simulation::RunStatus::Yielded ||
+               rb.status == Simulation::RunStatus::Yielded) {
+            if (ra.status == Simulation::RunStatus::Yielded)
+                ra = a.resume();
+            if (rb.status == Simulation::RunStatus::Yielded)
+                rb = b.resume();
+        }
+        CHECK(a.time() == 30000 && b.time() == 20000);
+        const std::string ca = logic(a, "cnt_out"), cb = logic(b, "cnt_out");
+        CHECK(ca != cb);
+        for (auto [t, cnt] : {std::pair{30000, ca}, std::pair{20000, cb}}) {
+            Simulation alone(snap("clkgen"));
+            alone.run(0);
+            alone.run(t);
+            if (logic(alone, "cnt_out") != cnt)
+                throw std::runtime_error(
+                    std::format("at {}: {} shared, {} alone",
+                                t,
+                                cnt,
+                                logic(alone, "cnt_out")));
+        }
     }
 }
 
@@ -286,9 +307,8 @@ const std::map<std::string, std::function<void()>> TESTS = {
     {"next_event_time", test_next_event_time},
     {"verilog_values", test_verilog_values},
     {"run_zero_applies_deposits", test_run_zero_applies_deposits},
-    {"verilog_on_instance_copy", test_verilog_on_instance_copy},
     {"delta_steps", test_delta_steps},
-    {"second_live_design_refused", test_second_live_design_refused},
+    {"shared_kernel", test_shared_kernel},
 };
 
 } // namespace
@@ -299,15 +319,14 @@ int main(int argc, char** argv) {
             printf("%s\n", name.c_str());
         return 0;
     }
-    if (argc < 3) {
-        fprintf(stderr, "usage: nvcx-tests <kernel.so> <designs dir> [name]\n");
+    if (argc < 2) {
+        fprintf(stderr, "usage: nvcx-tests <designs dir> [name]\n");
         return 2;
     }
-    g_kernel = argv[1];
-    g_designs = argv[2];
+    g_designs = argv[1];
     int failed = 0;
     for (auto& [name, fn] : TESTS) {
-        if (argc > 3 && name != argv[3])
+        if (argc > 2 && name != argv[2])
             continue;
         try {
             fn();

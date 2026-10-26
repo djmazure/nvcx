@@ -39,7 +39,9 @@ enum : int {
 
 class Kernel {
   public:
-    static Kernel& get(const std::string& path);
+    // Vivado's kernel ($XILINX_VIVADO), loaded on first use: one per
+    // process, shared by every design
+    static Kernel& get();
     const std::string& path() const {
         return path_;
     }
@@ -60,6 +62,14 @@ class Kernel {
     // per scalar) or Verilog ones ({aVal, bVal} words); XSI itself does not
     // say, and reports sizes in bytes for one and bits for the other.
     bool (*host_isPortVHDL)(void*, int) = nullptr;
+
+    // ISIMK::Host::setGlobals(bool): installs a design's state as the
+    // kernel's process-wide globals (true) or clears them (false). Every
+    // xsi_* entry point but xsi_get_time starts with it, which is how one
+    // kernel serves several open designs.
+    void (*host_setGlobals)(XsiHandle, bool) = nullptr;
+    // The design whose state the globals hold, if known
+    XsiHandle current = nullptr;
 
     // Exported globals (pointers to the kernel's storage)
     void** globalDesignProperties = nullptr;

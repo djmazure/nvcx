@@ -18,11 +18,11 @@ def _names():
 
 
 @pytest.mark.parametrize("name", _names())
-def test_engine(name, build, kernel, designs):
+def test_engine(name, build, designs):
     if name == "(not built)":
         pytest.skip("nvcx-tests not built")
     r = subprocess.run(
-        [build / "nvcx-tests", kernel, designs.all(), name],
+        [build / "nvcx-tests", designs.all(), name],
         capture_output=True,
         text=True,
     )

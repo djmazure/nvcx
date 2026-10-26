@@ -5,8 +5,10 @@
 //
 //   procedure nvcx_open(snapshot, name, generics : string);
 //
-// ...which loads the snapshot into a private copy of the xsim kernel (one per
-// instance) and finds the shell's ports by name through VHPI.
+// ...which opens the snapshot on Vivado's xsim kernel and finds the shell's
+// ports by name through VHPI. Every instance shares the one kernel, which
+// keeps its state in process-wide globals: the core switches them from one
+// design to the next (Simulation::make_current).
 //
 // Timing: the two simulators advance in lockstep, one delta cycle each. At the
 // end of every NVC delta's process phase the plugin writes the inputs that
@@ -468,22 +470,11 @@ void exec_open(const vhpiCbDataT* cb) {
     if (design_so.empty()) {
         return; // a black box
     }
-    std::string tag = instance_tag(g_instances.size());
-    std::string safe = name;
-    for (auto& c : safe) {
-        if (!isalnum((unsigned char)c)) {
-            c = '_';
-        }
-    }
     auto inst = std::make_unique<Instance>();
     inst->name = name;
     try {
-        // loads Vivado's library closure on the first instance
-        InstancePaths paths =
-            make_instance(default_workdir() / safe, tag, design_so);
-        inst->sim = std::make_unique<Simulation>(paths.design.string(),
-                                                 paths.kernel.string());
-        discard_instance(paths); // everything the kernel reads is read by now
+        // loads Vivado's kernel and its closure on the first instance
+        inst->sim = std::make_unique<Simulation>(design_so.string());
     } catch (const std::exception& e) {
         fail(name + ": " + e.what());
     }

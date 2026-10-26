@@ -60,7 +60,7 @@ def drop_width_12(tmp_path):
 CASES = {
     # combinational and registered paths, and the core's own oscillator, during activity and idle
     "exp": Case([Core("exp", "exp")], "tb_exp.vhd", "tb_exp", "250ns"),
-    # two instances of one snapshot and one of another: three private kernels in one NVC process
+    # two instances of one snapshot and one of another, all on the one kernel
     "multi": Case(
         [Core("dut", "dut"), Core("exp", "exp")], "tb_multi.vhd", "tb_multi", "100ns"
     ),

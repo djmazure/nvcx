@@ -42,7 +42,8 @@ class Simulation {
         std::string message;
     };
 
-    Simulation(const std::string& design_so, const std::string& kernel_so);
+    // Open the snapshot whose xsimk.so is *design_so* on Kernel::get()
+    explicit Simulation(const std::string& design_so);
     ~Simulation();
     void close();
     Simulation(const Simulation&) = delete;
@@ -55,9 +56,11 @@ class Simulation {
 
     // Time in units of 10^precision() seconds.
     uint64_t time() const {
+        make_current();
         return (uint64_t)kernel_->xsi_get_time(handle_);
     }
     int precision() const {
+        make_current();
         return kernel_->xsi_get_int(handle_, xsiTimePrecisionKernel);
     }
     // Run *ticks* time units (zero: settle the current time's deltas) to
@@ -78,6 +81,7 @@ class Simulation {
     }
     // Earliest kernel-scheduled event, or false
     bool next_event_time(uint64_t& t) const {
+        make_current();
         return kernel_->next_event_time(t);
     }
 
@@ -96,6 +100,9 @@ class Simulation {
     static int report_severity(const std::string& msg);
 
   private:
+    // Any number of designs share a kernel: this one's state becomes the
+    // kernel's globals before anything reads them or runs it.
+    void make_current() const;
     std::string last_error();
     void emit_report(const std::string& raw);
     RunResult after_run();

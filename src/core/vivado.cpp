@@ -1,6 +1,5 @@
 #include "nvcx/vivado.hpp"
 
-#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -111,7 +110,7 @@ namespace {
                 out.push_back(dyn[i]);
             return out;
         }
-        char* string(uint64_t off) {
+        const char* string(uint64_t off) const {
             return data.data() + strtab + off;
         }
     };
@@ -164,50 +163,7 @@ namespace {
         return info;
     }
 
-    // Rewrite DT_SONAME / DT_NEEDED strings in place with same-length
-    // replacements (name -> name).
-    void rename_in_place(const fs::path& so,
-                         const std::map<std::string, std::string>& mapping) {
-        ElfDynamic elf = read_dynamic(so);
-        bool changed = false;
-        for (const Elf64_Dyn& d : elf.entries()) {
-            if (d.d_tag != DT_NEEDED && d.d_tag != DT_SONAME)
-                continue;
-            char* s = elf.string(d.d_un.d_val);
-            auto it = mapping.find(s);
-            if (it == mapping.end())
-                continue;
-            if (it->second.size() != it->first.size())
-                throw std::runtime_error("rename must keep the length: " +
-                                         it->first);
-            std::memcpy(s, it->second.data(), it->second.size());
-            changed = true;
-        }
-        if (changed) {
-            std::ofstream f(so, std::ios::binary | std::ios::trunc);
-            f.write(elf.data.data(), (std::streamsize)elf.data.size());
-        }
-    }
-
-    // "libxv_simulator_kernel.so" with tag "00002a" ->
-    // "libxv_simulator_00002a.so": the rename is done in place in the
-    // string table, so the length is fixed.
-    std::string instance_name(const std::string& name, const std::string& tag) {
-        auto i = name.find(".so");
-        if (i == std::string::npos || i <= tag.size())
-            throw std::runtime_error(
-                "library name too short for an instance tag: " + name);
-        std::string r = name;
-        r.replace(i - tag.size(), tag.size(), tag);
-        return r;
-    }
-
 } // namespace
-
-fs::path default_workdir() {
-    const char* e = getenv("NVCX_WORK");
-    return e && *e ? fs::path(e) : fs::path("nvcx.work");
-}
 
 const Closure& load_closure() {
     static std::mutex mu;
@@ -275,82 +231,6 @@ const Closure& load_closure() {
     }
     loaded = c;
     return *loaded;
-}
-
-std::string instance_tag(uint64_t n) {
-    // base 62, fixed width: 62^6 instances before the width would have to
-    // grow
-    static const char digits[] =
-        "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    std::string tag(6, '0');
-    for (size_t i = tag.size(); i-- > 0 && n > 0; n /= 62)
-        tag[i] = digits[n % 62];
-    if (n > 0)
-        throw std::runtime_error("too many xsim instances in one process");
-    return tag;
-}
-
-InstancePaths make_instance(const fs::path& outdir_root,
-                            const std::string& tag,
-                            const fs::path& design_so) {
-    const Closure& closure = load_closure();
-    // the snapshot's name is its directory's, after any symbolic links: the
-    // kernel expects xsim.dir/<name> to be the name it was elaborated under
-    const std::string snap =
-        fs::canonical(design_so).parent_path().filename().string();
-    // A private directory per instance and process, so concurrent processes
-    // sharing a work directory never touch each other's copies.
-    fs::create_directories(outdir_root.parent_path());
-    std::string root = outdir_root.string() + ".XXXXXX";
-    if (!mkdtemp(root.data()))
-        throw std::runtime_error(
-            std::format("cannot create {}: {}", root, strerror(errno)));
-    // xsi_open insists on the elaboration layout: the snapshot directory
-    // must be a child of a directory literally named xsim.dir.
-    fs::path outdir = fs::path(root) / "xsim.dir" / snap;
-    fs::create_directories(outdir);
-    // the two libraries a design NEEDs by soname, under this instance's names
-    const std::string kernel = closure.kernel.filename().string();
-    const std::string bridge = "libxv_simbridge_kernel.so";
-    std::map<std::string, std::string> ren = {
-        {kernel, instance_name(kernel, tag)},
-        {bridge, instance_name(bridge, tag)}};
-    for (auto& [name, src] : {std::pair{kernel, closure.kernel},
-                              std::pair{bridge, closure.bridge}}) {
-        fs::copy_file(
-            src, outdir / ren[name], fs::copy_options::overwrite_existing);
-        rename_in_place(outdir / ren[name], ren);
-    }
-    InstancePaths p;
-    p.root = root;
-    p.kernel = outdir / ren[kernel];
-    p.design = outdir / (snap + "_xsimk." + tag + ".so");
-    fs::copy_file(design_so, p.design, fs::copy_options::overwrite_existing);
-    rename_in_place(p.design, ren);
-    for (const char* f : {"xsim.dbg",
-                          "xsim.rtti",
-                          "xsim.type",
-                          "xsim.mem",
-                          "xsim.reloc",
-                          "xsim.svtype",
-                          "xsim.version",
-                          "xsim.xdbg"})
-        if (fs::is_regular_file(design_so.parent_path() / f))
-            fs::copy_file(design_so.parent_path() / f,
-                          outdir / f,
-                          fs::copy_options::overwrite_existing);
-    // The design copy NEEDs the renamed stub by soname; the loader matches
-    // already-loaded sonames.
-    std::string stub = (outdir / ren.at("libxv_simbridge_kernel.so")).string();
-    if (!dlopen(stub.c_str(), RTLD_LAZY | RTLD_LOCAL))
-        throw std::runtime_error(
-            std::format("cannot preload {}: {}", stub, dlerror()));
-    return p;
-}
-
-void discard_instance(const InstancePaths& p) {
-    std::error_code ec;
-    fs::remove_all(p.root, ec); // best effort: a leftover is only clutter
 }
 
 } // namespace nvcx

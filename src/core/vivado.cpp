@@ -1,5 +1,6 @@
 #include "nvcx/vivado.hpp"
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -11,6 +12,9 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -28,7 +32,8 @@ namespace {
                                             "librt.so",
                                             "libz.so",
                                             "libutil.so"};
-    const char* const BRIDGE_SONAME = "libxv_simbridge_kernel.so";
+    // The prefix of the kernel stub's placeholder NEEDED entry (CMakeLists)
+    const char* const KERNEL_PATH_PLACEHOLDER = "nvcx-kernel-path-";
 
     bool host_provided(const std::string& n) {
         for (const char* p : SHARED_WITH_HOST)
@@ -84,18 +89,15 @@ namespace {
         return fs::read_symlink("/proc/self/exe").parent_path();
     }
 
-    // nvcx's stub for the bridge library, beside this library or executable
-    // (the build tree) or in lib/nvcx of the install.
-    fs::path stub_path() {
+    // One of nvcx's stub libraries, *name*, beside this library or
+    // executable (the build tree) or in lib/nvcx of the install.
+    fs::path stub_path(const std::string& name) {
         for (const fs::path& cand :
-             {self_dir() / BRIDGE_SONAME,
-              self_dir() / ".." / "lib" / "nvcx" / BRIDGE_SONAME})
+             {self_dir() / name, self_dir() / ".." / "lib" / "nvcx" / name})
             if (fs::is_regular_file(cand))
                 return cand;
-        throw std::runtime_error(
-            std::format("bridge stub {} not found next to {}",
-                        BRIDGE_SONAME,
-                        self_dir().string()));
+        throw std::runtime_error(std::format(
+            "stub {} not found next to {}", name, self_dir().string()));
     }
 
     // The dynamic section of a shared library, with its string table.
@@ -163,6 +165,61 @@ namespace {
         return info;
     }
 
+    // The kernel stub's image, NEEDing *kernel* in place of its placeholder
+    std::vector<char> kernel_stub_image(const fs::path& stub,
+                                        const fs::path& kernel) {
+        ElfDynamic elf = read_dynamic(stub);
+        const std::string path = fs::absolute(kernel).string();
+        for (const Elf64_Dyn& d : elf.entries()) {
+            if (d.d_tag != DT_NEEDED)
+                continue;
+            const char* s = elf.string(d.d_un.d_val);
+            if (!std::string_view(s).starts_with(KERNEL_PATH_PLACEHOLDER))
+                continue;
+            if (path.size() > strlen(s))
+                throw std::runtime_error(std::format(
+                    "the kernel's path {} is longer than {} has room for",
+                    path,
+                    stub.string()));
+            std::memcpy(elf.data.data() + (s - elf.data.data()),
+                        path.c_str(),
+                        path.size() + 1);
+            return std::move(elf.data);
+        }
+        throw std::runtime_error(stub.string() +
+                                 " has no placeholder for the kernel's path");
+    }
+
+    // Load a soname-less kernel's stub (see src/kernelstub.cpp), with its
+    // path written in, from memory. The loader knows the stub by its
+    // /proc/self/fd path, so the descriptor stays open: that path must never
+    // name another file.
+    void load_kernel_stub(const fs::path& kernel) {
+        const std::string name = kernel.filename().string();
+        const fs::path stub = stub_path(name);
+        if (elf_info(stub).soname != name)
+            throw std::runtime_error(std::format(
+                "{} does not carry the soname {}", stub.string(), name));
+        std::vector<char> image = kernel_stub_image(stub, kernel);
+        int fd = memfd_create(name.c_str(), MFD_CLOEXEC);
+        if (fd < 0)
+            throw std::runtime_error(
+                std::format("memfd_create: {}", strerror(errno)));
+        for (size_t off = 0; off < image.size();) {
+            ssize_t n = write(fd, image.data() + off, image.size() - off);
+            if (n < 0)
+                throw std::runtime_error(std::format(
+                    "writing the kernel stub: {}", strerror(errno)));
+            off += (size_t)n;
+        }
+        const std::string proc = std::format("/proc/self/fd/{}", fd);
+        if (!dlopen(proc.c_str(), RTLD_LAZY | RTLD_LOCAL | RTLD_DEEPBIND))
+            throw std::runtime_error(
+                std::format("cannot load the kernel stub for {}: {}",
+                            kernel.string(),
+                            dlerror()));
+    }
+
 } // namespace
 
 const Closure& load_closure() {
@@ -192,18 +249,24 @@ const Closure& load_closure() {
                 }
         }
     }
-    // The bridge library: Vivado's own only when the closure imports from it.
-    auto bridge = found.find(BRIDGE_SONAME);
+    // The bridge library (lib{xv,rdi}_simbridge_kernel.so, after the
+    // kernel's name): Vivado's own only when the closure imports from it.
+    // Designs with IP NEED it too.
+    std::string bridge_name = c.kernel.filename().string();
+    bridge_name.replace(bridge_name.find("simulator_kernel"),
+                        std::string_view("simulator_kernel").size(),
+                        "simbridge_kernel");
+    auto bridge = found.find(bridge_name);
     if (bridge != found.end()) {
         c.bridge = bridge->second;
         found.erase(bridge);
     } else {
-        c.bridge = stub_path();
-        if (elf_info(c.bridge).soname != BRIDGE_SONAME)
+        c.bridge = stub_path(bridge_name);
+        if (elf_info(c.bridge).soname != bridge_name)
             throw std::runtime_error(
                 std::format("{} does not carry the soname {}",
                             c.bridge.string(),
-                            BRIDGE_SONAME));
+                            bridge_name));
     }
     std::vector<fs::path> pending{c.bridge};
     for (auto& [name, path] : found)
@@ -229,6 +292,11 @@ const Closure& load_closure() {
                             last_error));
         pending.swap(next);
     }
+    // Designs NEED the kernel by its file name, which before 2025.1 is not
+    // its soname (it has none): a stub takes the name, and loads the kernel
+    // as its dependency, in each design's own scope.
+    if (elf_info(c.kernel).soname.empty())
+        load_kernel_stub(c.kernel);
     loaded = c;
     return *loaded;
 }

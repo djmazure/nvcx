@@ -26,6 +26,15 @@ Kernel::Kernel(const std::string& path) : path_(path) {
     if (!handle_)
         throw std::runtime_error(std::format(
             "cannot load simulator kernel {}: {}", path, dlerror()));
+
+    // XSI's xsimDir, which lets nvcx open a snapshot wherever it is, arrived
+    // in 2023: before, xsi_open looks only in the working directory's xsim.dir
+    if (!dlsym(handle_, "iki_set_xsimdir_location_if_remapped"))
+        throw std::runtime_error(
+            std::format("simulator kernel {} is too old: its XSI cannot open "
+                        "a snapshot outside the working directory (nvcx "
+                        "supports Vivado 2023.2 and later)",
+                        path));
     resolve_all();
     discover_offsets();
 }

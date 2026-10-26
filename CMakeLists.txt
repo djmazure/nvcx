@@ -30,9 +30,25 @@ target_link_libraries(nvcx_plugin PRIVATE nvcx_core nvcx_warnings)
 target_link_options(nvcx_plugin PRIVATE "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/bridge/exports.map" -Wl,-Bsymbolic)
 set_target_properties(nvcx_plugin PROPERTIES OUTPUT_NAME nvcx LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/bridge/exports.map)
 
-# WDB stub to reduce Vivado's shared-library blast radius
+# WDB stub to reduce Vivado's shared-library blast radius, under the bridge
+# library's name since 2025.1 and before
 add_library(wdbstub SHARED src/wdbstub.cpp)
 set_target_properties(wdbstub PROPERTIES OUTPUT_NAME xv_simbridge_kernel)
+add_library(wdbstub_rdi SHARED src/wdbstub.cpp)
+set_target_properties(wdbstub_rdi PROPERTIES OUTPUT_NAME rdi_simbridge_kernel)
+
+# Before 2025.1 the kernel has no soname. This stub carries its name, and
+# NEEDs a placeholder that load_closure() overwrites with the kernel's path;
+# kernelpath only supplies that NEEDED entry when linking.
+string(REPEAT "X" 1000 NVCX_KERNEL_PATH_ROOM)
+add_library(kernelpath SHARED src/kernelstub.cpp)
+set_target_properties(kernelpath PROPERTIES NO_SONAME ON)
+target_link_options(kernelpath PRIVATE "-Wl,-soname,nvcx-kernel-path-${NVCX_KERNEL_PATH_ROOM}")
+
+add_library(kernelstub SHARED src/kernelstub.cpp)
+target_link_libraries(kernelstub PRIVATE kernelpath)
+target_link_options(kernelstub PRIVATE -Wl,--no-as-needed)
+set_target_properties(kernelstub PROPERTIES OUTPUT_NAME rdi_simulator_kernel SKIP_BUILD_RPATH ON)
 
 # the core's VHDL entity, beside the build tree's plugin
 add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/nvcx.vhd
@@ -64,7 +80,7 @@ cmake_path(ABSOLUTE_PATH NVCX_TCL_DIR BASE_DIRECTORY ${CMAKE_INSTALL_PREFIX}
   OUTPUT_VARIABLE NVCX_TCL_FULL_DIR)
 configure_file(nvcx.pc.in ${CMAKE_BINARY_DIR}/generated/nvcx.pc @ONLY)
 
-install(TARGETS nvcx_plugin wdbstub LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/nvcx)
+install(TARGETS nvcx_plugin wdbstub wdbstub_rdi kernelstub LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/nvcx)
 install(FILES vhdl/nvcx.vhd DESTINATION ${CMAKE_INSTALL_DATADIR}/nvcx)
 install(FILES ${NVCX_TCL} DESTINATION ${NVCX_TCL_DIR}/nvcx${PROJECT_VERSION})
 install(FILES ${CMAKE_BINARY_DIR}/generated/nvcx.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)

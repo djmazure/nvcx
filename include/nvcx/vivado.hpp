@@ -13,7 +13,8 @@ struct Closure {
 
 // Load the kernel's dependency closure (every library but the kernel itself)
 // from $XILINX_VIVADO into the process, once, and describe it. The kernel is
-// not loaded: Kernel::get does that.
+// not loaded: Kernel::get does that. (Before 2025.1 its stub loads it here:
+// see src/kernelstub.cpp.)
 const Closure& load_closure();
 
 } // namespace nvcx

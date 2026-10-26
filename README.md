@@ -58,13 +58,14 @@ infrastructure.
 
 Tested on a Ubuntu image against:
 
+- Vivado 2023.2
+- Vivado 2024.1
 - Vivado 2025.1
 - Vivado 2025.2
 - Vivado 2026.1
 
-Versions older than this have a different shared-library naming style
-(`libxv_*` vs `librdi_*`) and are not supported by nvcx (although this could
-be added if anyone wants it.)
+Older versions (2022.2 and before) can't open a snapshot outside the working
+directory through XSI, and nvcx refuses them.
 
 ## Install
 
@@ -106,14 +107,14 @@ versions, which are unlikely to all be happy in your host OS image.)
 
 In order to test against all suitable Vivado installations, run:
 
-    $ make test-all  # add VIVADOES="2025.1 2025.2 2026.1" to specify
+    $ make test-all  # add VIVADOES="2024.1 2026.1" to specify
 
 ## FAQ
 
 **Q: What versions of Vivado are supported?**
-> Vivado 2025.1, 2025.2, and 2026.1 are tested via `make test-all`.
-> Older versions of Vivado named their shared libraries differently (`libxv_*`
-> vs `librdi_*`) and would take a little extra effort.
+> Vivado 2023.2, 2024.1, 2025.1, 2025.2, and 2026.1 are tested via `make
+> test-all`. Before 2023, XSI could only open a snapshot from the working
+> directory's xsim.dir, so those releases are refused.
 
 **Q: For XPM, should I use `nvcx` or `xpm_vhdl` (`nvc --install xpm_vhdl`)?**
 > Your call. `nvcx` will be slower; `xpm_vhdl` has some coverage gaps.  Which

@@ -14,12 +14,14 @@ image:
 test: image
 	$(DOCKER_RUN) make pytest
 
-# All "blessed" Vivado releases
-VIVADOES ?= 2025.1 2025.2 2026.1
+# All "blessed" Vivado releases, installed as <root>/<release>/Vivado (2025.1 and
+# later) or <root>/Vivado/<release>
+VIVADOES ?= 2023.2 2024.1 2025.1 2025.2 2026.1
 test-all:
 	@fail=; for v in $(VIVADOES); do \
 		echo "=== $$v"; \
-		XILINX_VIVADO=$(XILINX_ROOT)/$$v/Vivado $(MAKE) --no-print-directory test || fail="$$fail $$v"; \
+		d=$(XILINX_ROOT)/$$v/Vivado; test -d $$d || d=$(XILINX_ROOT)/Vivado/$$v; \
+		XILINX_VIVADO=$$d $(MAKE) --no-print-directory test || fail="$$fail $$v"; \
 	done; \
 	test -z "$$fail" || { echo "FAILED:$$fail"; exit 1; }
 

@@ -31,8 +31,8 @@ If you're curious, try "hello":
   fundamental reasons) can't make use of IEEE 1735-style encrypted IP.
 
 * xsim is now a "polyfill" for NVC - a SystemVerilog design that's beyond NVC's
-  current capabilities (e.g. AMD/Xilinx xpm, which use entity-level generics)
-  can now instantiate these IP blocks in xsi and simulate them as black boxes.
+  current capabilities (e.g. AMD/Xilinx xpm) can now instantiate these IP
+  blocks in xsi and simulate them as black boxes.
 
 * Similarly, NVC can be a "polyfill" for xsim - when using NVC as a top-level
   simulation kernel and xsim for the "mop-up" terminal IPs, I can make use of
@@ -49,12 +49,6 @@ made, as it would in a single simulator. Deltas in which no core output changes
 while NVC has nothing pending run without an NVC cycle, since nothing on NVC's
 side could have happened in them.  `tests/test_delta.py` checks
 delta-cycle properties against NVC simulating the same cores natively.
-
-I suspect this is not a 100% rigorous reproduction of the delta-cycle semantics
-of a single simulator kernel.  I also suspect it doesn't matter under
-conventional (synchronous) design practice. I'm not a simulator expert, so you
-are (unfortunately) going to have to convince yourself. If you do, regardless
-of your conclusions, drop me a note.
 
 ## Testing
 
@@ -122,10 +116,10 @@ In order to test against all suitable Vivado installations, run:
 > vs `librdi_*`) and would take a little extra effort.
 
 **Q: For XPM, should I use `nvcx` or `xpm_vhdl` (`nvc --install xpm_vhdl`)?**
-> Your call. `nvcx` will be slower; `xpm_vhdl` has minor coverage gaps for
-> things like ECC/error injection.  Which strategy is better is mostly a
-> question of designer's preference: do you trust nvcx's simulator bridge, or
-> xpm_vhdl's faithful reinterpretation of xpm RTL?
+> Your call. `nvcx` will be slower; `xpm_vhdl` has some coverage gaps.  Which
+> strategy is better is mostly a question of designer's preference: do you
+> trust nvcx's simulator bridge, or xpm_vhdl's faithful reinterpretation of xpm
+> RTL?
 
 **Q: How much slower is nvcx than NVC? than xsim?**
 > With a single seam, nvcx performs approximately as quickly as you'd expect

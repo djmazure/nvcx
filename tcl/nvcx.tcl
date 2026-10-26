@@ -37,14 +37,14 @@ namespace eval nvcx {
     }
 
     # The snapshot of LIBRARY.ENTITY elaborated with ELAB (xelab arguments)
-    # and the generics TEXT (NAME=VALUE per line, each a -generic_top): its
+    # and the generics TOPS (a list of -generic_top values): its
     # directory xsim.dir/ENTITY in the cache, running xelab on a miss. A
     # finished temporary directory is renamed into place, so a half-written
     # snapshot is never seen and concurrent scripts cannot clash: whoever
     # renames first wins and the other uses that.
-    proc elaborate {library entity elab text} {
+    proc elaborate {library entity elab tops} {
         set snapshot "$library.$entity"
-        set key "$snapshot|$elab|$text|[vivado_version]"
+        set key "$snapshot|$elab|[join $tops "\n"]|[vivado_version]"
         set snapshots [file join [workdir] snapshots]
         set dir [file join $snapshots "$entity-[::sha2::sha256 -hex -- $key]"]
         set so [file join $dir xsim.dir $entity xsimk.so]
@@ -53,9 +53,7 @@ namespace eval nvcx {
         set tmp [::fileutil::maketempdir -prefix "[file tail $dir]." -dir $snapshots]
         ::fileutil::writeFile [file join $tmp key.txt] $key
         set args [list -dll {*}$elab]
-        foreach g [split $text "\n"] {
-            if {$g ne ""} { lappend args -generic_top $g }
-        }
+        foreach g $tops { lappend args -generic_top $g }
         lappend args --snapshot $entity $snapshot
         set xelab xelab
         if {[info exists ::env(XILINX_VIVADO)]} {
@@ -261,6 +259,19 @@ namespace eval nvcx {
         puts $chan "end architecture;"
     }
 
+    # An instance's generics as -generic_top values for xelab. A string is
+    # quoted: unquoted, xelab takes a numeric-looking one ("0") as an integer.
+    proc generic_tops {generics} {
+        set tops {}
+        foreach g $generics {
+            lassign $g gname gtype gvalue
+            set v [generic_text $gtype $gvalue]
+            if {$gtype eq "string"} { set v "\"[string map {\" \\\"} $v]\"" }
+            lappend tops "$gname=$v"
+        }
+        return $tops
+    }
+
     # The GENERICS text an instance's values produce at run time.
     proc generics_text {generics} {
         set parts {}
@@ -353,7 +364,7 @@ namespace eval nvcx {
                 set text [generics_text $generics]
                 if {[dict exists $table $text]} continue
                 puts "nvcx: elaborating $library.$name for $full"
-                set dir [elaborate $library $name $elab $text]
+                set dir [elaborate $library $name $elab [generic_tops $generics]]
                 puts "nvcx:   $dir"
                 dict set table $text $dir
             }
